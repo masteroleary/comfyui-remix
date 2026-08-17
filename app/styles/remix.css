@@ -1,0 +1,246 @@
+/* ── Remix dialog ───────────────────────────────────────────────────────────
+   Styles for RemixDialog.js and the two browsers it opens over itself (the
+   media picker and the workflow library). Ported verbatim from the pre-SPA
+   page's second <style> block so the dialog looks exactly as it did; the
+   comments are the originals and explain the parts that are not obvious.
+
+   Dialog stack, top to bottom: .rmx-lb 3300, .rmx-picker-overlay 3100,
+   .rmx-overlay 3000, .rmx-topbar 2950, .rmx-fab 2900.
+
+   Colours are literal rather than common.css tokens on purpose: this block is
+   a faithful copy, and tokenising it is a redesign, not a port. */
+
+/* Tools flyout inside the Preview tab. Absolutely positioned against
+   .rmx-preview rather than .rmx-media, which scrolls. */
+.rmx-tools{position:absolute;top:10px;left:10px;z-index:5}
+.rmx-tools .modal-act-btn{background:rgba(255,255,255,.16)}
+
+body.rmx-noscroll{overflow:hidden !important;overscroll-behavior:none}
+.rmx-overlay{position:fixed;inset:0;z-index:3000;background:#000b;display:flex;align-items:center;justify-content:center;padding:24px}
+.rmx-dialog{background:#141416;border:1px solid #38383a;border-radius:16px;width:100%;max-width:1060px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px #000c}
+.rmx-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid #2c2c2e;flex:none}
+.rmx-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f2f2f7}
+/* Jobs still uses the single-row .rmx-head; only Remix stacks, so the column
+   switch is opt-in rather than a change to the shared rule. */
+.rmx-head-stack{flex-direction:column;align-items:stretch;gap:4px}
+.rmx-head-row{display:flex;align-items:center;gap:10px}
+/* Full dialog width and two lines to spend before it has to truncate, which is
+   the difference between reading a generated filename and guessing at it. */
+.rmx-head-file{
+  font-size:11px;color:#8e8e93;line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;word-break:break-all;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+}
+.rmx-x{margin-left:auto;background:none;border:none;color:#f2f2f7;font-size:22px;cursor:pointer}
+.rmx-x:disabled{opacity:.4;cursor:default}
+.rmx-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+/* Positioning context for the Tools flyout — it has to sit outside
+   .rmx-media, which scrolls, or it would scroll away with the media. */
+.rmx-preview{flex:1;min-height:0;display:flex;position:relative}
+.rmx-media{flex:1;min-height:0;background:#000;display:flex;align-items:center;justify-content:center;padding:12px;overflow:auto}
+.rmx-media img,.rmx-media video{max-width:100%;max-height:100%;border-radius:8px}
+.rmx-form{flex:1;min-height:0;padding:16px;overflow:auto}
+.rmx-runsec{flex:1;min-height:0;padding:16px;overflow:auto}
+.rmx-runsec .rmx-run{flex-wrap:wrap;margin:0 0 8px}
+.rmx-inp{background:#1c1c1e;color:#f2f2f7;border:1px solid #48484a;border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit}
+select.rmx-inp{cursor:pointer}
+.rmx-grid{display:flex;flex-wrap:wrap;gap:14px}
+.rmx-field{display:flex;flex-direction:column;gap:5px}
+.rmx-field.wide{flex-basis:100%}
+.rmx-lbl{display:flex;align-items:center;gap:6px;font-size:12px;color:#8e8e93;text-transform:uppercase;letter-spacing:.4px}
+.rmx-tgl{width:15px;height:15px;accent-color:#0a84ff;cursor:pointer}
+.rmx-mut{color:#8e8e93}
+/* Field-build progress. The bar is determinate only while there is something
+   real to measure (the /object_info byte count); otherwise it slides. */
+.rmx-prog{padding:10px 2px}
+.rmx-prog-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:12.5px;color:#c7c7cc;margin-bottom:7px}
+.rmx-prog-sub{color:#8e8e93;font-size:11.5px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.rmx-prog-bar{height:6px;border-radius:3px;background:#2c2c2e;overflow:hidden}
+.rmx-prog-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#0a84ff,#64d2ff);transition:width .25s ease}
+.rmx-prog-bar.indet .rmx-prog-fill{width:38%!important;transition:none;animation:rmxSlide 1.15s ease-in-out infinite}
+@keyframes rmxSlide{0%{margin-left:-38%}100%{margin-left:100%}}
+.rmx-seedwrap{display:flex;gap:8px;align-items:center}
+.rmx-seed{position:relative;width:58px;height:30px;border-radius:15px;border:1px solid #48484a;background:#2c2c2e;cursor:pointer;padding:0;flex:none;transition:background .15s,border-color .15s}
+.rmx-seed.on{background:#0a84ff;border-color:#0a84ff}
+.rmx-seed .thumb{position:absolute;top:2px;left:2px;width:26px;height:26px;border-radius:50%;background:#f2f2f7;display:flex;align-items:center;justify-content:center;font-size:14px;transition:left .15s}
+.rmx-seed.on .thumb{left:30px}
+.rmx-loras{display:flex;flex-direction:column;gap:4px}
+.rmx-lora{display:flex;align-items:center;gap:8px;font-size:12px}
+.rmx-lora.off{opacity:.5}
+/* Prompt-matched but still unticked: brighter than a plain disabled row so it
+   reads as an offer rather than leftovers, with the matched word shown so the
+   reason it appeared is visible. */
+.rmx-lora.sug{opacity:.9}
+.rmx-lora-lib{
+  flex:0 0 auto;font-size:10px;line-height:1;padding:3px 6px;border-radius:999px;
+  background:#2d2416;color:#e0b86c;border:1px solid #4a3a1e;white-space:nowrap;
+}
+.rmx-lora-hit{
+  flex:0 0 auto;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:10px;line-height:1;padding:3px 6px;border-radius:999px;
+  background:#1e3a5a;color:#6cb6e0;border:1px solid #2a5480;
+}
+.rmx-lora label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c7c7cc}
+.rmx-lora input[type=number]{width:80px;background:#1c1c1e;color:#f2f2f7;border:1px solid #48484a;border-radius:6px;padding:4px 6px}
+.rmx-imgf{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rmx-imgf img{height:44px;border-radius:6px;border:1px solid #48484a}
+.rmx-hidden{margin-top:14px;background:#1c1c1e;border:1px solid #38383a;border-radius:10px}
+.rmx-hidden summary{list-style:none;cursor:pointer;padding:10px 12px;font-size:12px;color:#8e8e93;display:flex;align-items:center;gap:6px}
+.rmx-hidden summary::-webkit-details-marker{display:none}
+.rmx-hidden summary::before{content:'▸';transition:transform .12s}
+.rmx-hidden[open] summary::before{transform:rotate(90deg)}
+.rmx-hidden .rmx-field{padding:6px 12px}
+.rmx-run{display:flex;align-items:center;gap:10px;margin:16px 0 4px}
+.rmx-btn{border:1px solid #48484a;border-radius:8px;padding:9px 18px;font-size:14px;font-weight:600;cursor:pointer;color:#f2f2f7;background:#2c2c2e}
+.rmx-btn.go{background:#2d5a1e;border-color:#3a7a28;color:#a8e06c}
+.rmx-btn.cancel{background:#5a1e1e;border-color:#7a2828;color:#ff9d9d}
+.rmx-btn:disabled{opacity:.5;cursor:default}
+.rmx-status{font-size:12px;color:#8e8e93}
+/* Job progress bar. NOT .rmx-prog: that name is already the padded wrapper of the
+   field-loading progress block above, and with box-sizing:border-box the merged
+   height:6px + padding:10px left a 0px-tall content box, so the fill inside was
+   invisible and every job bar looked frozen. */
+.rmx-jobbar{height:6px;background:#2c2c2e;border-radius:3px;overflow:hidden;margin:8px 0}
+.rmx-jobbar-fill{height:100%;background:#0a84ff;width:0;transition:width .2s}
+.rmx-log{margin-top:8px;max-height:150px;overflow:auto;background:#0a0a0a;border:1px solid #2c2c2e;border-radius:8px;padding:8px;font:11px/1.5 ui-monospace,monospace;color:#c7c7cc}
+.rmx-log .ll-err{color:#ff6b6b}
+.rmx-log .ll-done{color:#a8e06c}
+.rmx-log .ll-warn{color:#ffcf6b}
+.rmx-outgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;margin-top:12px}
+.rmx-out{display:block;border:1px solid #38383a;border-radius:8px;overflow:hidden;aspect-ratio:1}
+/* Labelled buttons are far wider than the icons they replaced, so this row
+   wraps rather than squashing them or pushing the dialog sideways. */
+/* Prompt boxes size themselves to their text (see the autosize directive).
+   resize:vertical is dropped because a manual drag sets an inline height that
+   the next keystroke overwrites, which reads as the box fighting you. The cap
+   keeps a very long prompt from pushing the Remix button off the dialog. */
+.rmx-ta{resize:none;overflow-y:auto;min-height:3.4em;max-height:40vh}
+
+.rmx-wf-acts{flex-wrap:wrap}
+.rmx-wf-acts .rmx-btn2{flex:none;white-space:nowrap}
+/* This one carries a user-chosen name, so it is the only button in the row
+   whose width is not ours to predict. Cap it and ellipsise; the full label
+   stays in the tooltip. */
+.rmx-wf-acts .rmx-del-sc{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.rmx-out img{width:100%;height:100%;object-fit:cover}
+/* A run that has been queued but has not written its file yet. Same cell size
+   as a real thumbnail so the grid does not reflow as each one lands. */
+.rmx-out-wait{display:flex;align-items:center;justify-content:center;background:var(--surface2)}
+.rmx-jobs{padding:12px 16px;overflow:auto;max-height:80vh;display:flex;flex-direction:column;gap:10px}
+.rmx-job{display:flex;gap:12px;background:#1c1c1e;border:1px solid #2c2c2e;border-radius:12px;padding:10px}
+.rmx-job-src{width:64px;height:64px;flex:none;border-radius:8px;overflow:hidden;background:#000}
+.rmx-job-src img{width:100%;height:100%;object-fit:cover}
+.rmx-job-main{flex:1;min-width:0}
+.rmx-job-title{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:#f2f2f7}
+.rmx-dot{width:8px;height:8px;border-radius:50%;flex:none;background:#8e8e93}
+.rmx-dot.running{background:#0a84ff;animation:rmxpulse 1s infinite}
+.rmx-dot.done,.rmx-dot.complete{background:#30d158}
+.rmx-dot.error{background:#ff453a}
+.rmx-dot.lost{background:#ff9f0a}
+/* A queued job is waiting on the GPU, not stalled — a still dot and a striped
+   bar say that, where a pulsing dot at 0% read as "frozen". */
+.rmx-dot.queued{background:#5e5ce6;animation:none}
+.rmx-jobbar-fill.wait{width:100%;background:repeating-linear-gradient(115deg,#2c2c2e,#2c2c2e 8px,#3a3a3c 8px,#3a3a3c 16px);animation:rmxwait 1s linear infinite}
+@keyframes rmxwait{to{background-position:32px 0}}
+.rmx-link{display:flex;align-items:center;gap:6px;font-size:11px;color:#ff9f0a;margin-bottom:8px}
+.rmx-topbar{position:fixed;top:0;left:0;right:0;height:4px;z-index:2950;cursor:pointer;background:#0a84ff22;overflow:hidden}
+.rmx-topbar:hover{height:6px}
+.rmx-topbar-fill{height:100%;background:linear-gradient(90deg,#0a84ff,#5ac8fa);width:0;transition:width .3s;box-shadow:0 0 8px #0a84ffaa}
+.rmx-topbar-fill.indet{width:35%;animation:rmxindet 1.15s ease-in-out infinite}
+@keyframes rmxindet{0%{transform:translateX(-120%)}100%{transform:translateX(340%)}}
+@keyframes rmxpulse{50%{opacity:.35}}
+.rmx-job-prompt{font-size:12px;color:#c7c7cc;margin:3px 0;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.rmx-job-acts{display:flex;flex-direction:column;gap:6px;flex:none}
+.rmx-mini{background:#2c2c2e;border:1px solid #48484a;border-radius:8px;color:#f2f2f7;cursor:pointer;padding:5px 9px;font-size:13px}
+.rmx-mini:hover{border-color:#0a84ff}
+.rmx-mini:disabled{opacity:.4;cursor:not-allowed;border-color:#48484a}
+/* Sits beside the Jobs title; .rmx-x keeps its margin-left:auto and stays right. */
+.rmx-clear{flex:none;white-space:nowrap;font-size:12px;padding:4px 9px}
+.rmx-fab{position:fixed;right:20px;bottom:20px;z-index:2900;background:#0a84ff;color:#fff;border:none;border-radius:24px;padding:12px 18px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 8px 24px #0a84ff55}
+.rmx-tabs{display:flex;gap:2px;background:#0a0a0a;border:1px solid #2c2c2e;border-radius:8px;padding:2px}
+.rmx-tabs button{background:none;border:none;color:#8e8e93;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px}
+.rmx-tabs button.on{background:#2c2c2e;color:#f2f2f7}
+.rmx-btn2{background:#2c2c2e;border:1px solid #48484a;border-radius:8px;color:#f2f2f7;cursor:pointer;padding:6px 12px;font-size:12px}
+.rmx-btn2:disabled{opacity:.45;cursor:not-allowed}
+.rmx-inp.taken{border-color:#e06c6c}
+.rmx-btn2:hover{border-color:#0a84ff}
+.rmx-lora-more{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;padding:5px 9px;margin-top:2px;background:#1c1c1e;border:1px solid #2c2c2e;border-radius:8px;font-size:12px;color:#8e8e93;user-select:none}
+.rmx-lora-more:hover{border-color:#0a84ff;color:#c7c7cc}
+.rmx-lora-arrow{transition:transform .12s;color:#8e8e93}
+.rmx-lora-arrow.open{transform:rotate(180deg)}
+/* Field help: an ⓘ icon with a hover/focus tooltip (e.g. Model Sampling Shift). */
+.rmx-info{position:relative;display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;border-radius:50%;background:#2c2c2e;color:#c7c7cc;font-size:10px;font-style:normal;font-weight:700;line-height:1;cursor:help;margin-left:5px;border:1px solid #3a3a3c;vertical-align:middle;flex:none}
+.rmx-info .rmx-tip{position:absolute;bottom:calc(100% + 7px);left:50%;transform:translateX(-50%);white-space:pre-line;width:max-content;max-width:250px;background:#1c1c1e;color:#eaeaea;border:1px solid #3a3a3c;border-radius:8px;padding:9px 11px;font-size:12px;line-height:1.55;box-shadow:0 8px 24px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .12s;z-index:120;text-align:left;font-weight:400;text-transform:none;letter-spacing:0}
+.rmx-info:hover .rmx-tip,.rmx-info:focus .rmx-tip{opacity:1}
+.rmx-node{background:#161618;border:1px solid #2c2c2e;border-radius:8px;margin-top:6px}
+.rmx-node>summary{list-style:none;cursor:pointer;padding:7px 10px;font-size:12px;color:#c7c7cc}
+.rmx-node>summary::-webkit-details-marker{display:none}
+.rmx-node>summary::before{content:'▸ ';color:#636366}
+.rmx-node[open]>summary::before{content:'▾ '}
+.rmx-node-body{padding:2px 10px 10px;font-size:11px;display:flex;flex-direction:column;gap:3px}
+.rmx-node-inp{display:flex;gap:8px;align-items:center}
+.rmx-node-k{color:#8e8e93;min-width:96px;flex:none}
+.rmx-node-v{color:#c7c7cc;word-break:break-word;overflow-wrap:anywhere}
+.rmx-node-edit{flex:1;min-width:0;padding:3px 6px;font-size:11px}
+.rmx-node-edit.edited{border-color:#0a84ff;background:#0a2540;color:#eaf3ff}
+.rmx-node.edited>summary{color:#5ac8fa}
+.rmx-raw{margin:0;padding:8px 10px;font:11px/1.4 ui-monospace,monospace;color:#a8b3c7;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto}
+.rmx-repl{margin-top:14px;background:#1c1c1e;border:1px solid #38383a;border-radius:10px}
+.rmx-repl>summary{list-style:none;cursor:pointer;padding:10px 12px;font-size:12px;color:#8e8e93;text-transform:uppercase;letter-spacing:.5px}
+.rmx-repl>summary::-webkit-details-marker{display:none}
+.rmx-repl>summary::before{content:'▸';display:inline-block;margin-right:6px;transition:transform .12s}
+.rmx-repl[open]>summary::before{transform:rotate(90deg)}
+.rmx-repl-body{padding:2px 12px 12px}
+.rmx-repl-all{display:flex;align-items:center;gap:6px;font-size:12px;color:#8e8e93;margin-bottom:8px;cursor:pointer;user-select:none}
+.rmx-repl-all input,.rmx-repl-row input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:#0a84ff}
+.rmx-repl-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.rmx-repl-row input[type=text]{flex:1;min-width:0}
+.rmx-repl-swap{flex:none;padding:6px 9px;color:#0a84ff}
+.rmx-repl-del{flex:none;width:30px;padding:6px 0;background:#3a1e1e;color:#e06c6c;border:1px solid #5a2a2a;border-radius:8px;cursor:pointer;font-size:12px}
+.rmx-repl-del:hover{border-color:#e06c6c}
+.rmx-nodegroup{margin:2px 0 10px}
+.rmx-lora-cols{display:flex;gap:16px;margin-top:6px}
+.rmx-lora-col{flex:1;min-width:0}
+@media (max-width:640px){.rmx-lora-cols{flex-direction:column;gap:8px}}
+.rmx-nodegroup-title{font-size:10px;color:#7d7d82;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 5px;border-bottom:1px solid #2c2c2e;padding-bottom:3px}
+.rmx-lb{position:fixed;inset:0;z-index:3300;background:#000e;display:flex;align-items:center;justify-content:center;padding:20px}
+.rmx-lb-body{max-width:100%;max-height:100%;display:flex;align-items:center;justify-content:center}
+.rmx-lb-body img,.rmx-lb-body video{max-width:100%;max-height:86vh;border-radius:8px;background:#000}
+.rmx-lb-x{position:absolute;top:12px;right:16px;background:#0008;border:none;color:#fff;font-size:20px;width:40px;height:40px;border-radius:50%;cursor:pointer;z-index:2}
+.rmx-lb-nav{position:absolute;top:50%;transform:translateY(-50%);background:#0008;border:none;color:#fff;font-size:38px;line-height:1;width:50px;height:72px;border-radius:10px;cursor:pointer;z-index:2}
+.rmx-lb-nav.prev{left:12px}
+.rmx-lb-nav.next{right:12px}
+.rmx-lb-nav[disabled]{opacity:.2;cursor:default}
+.rmx-lb-label{position:absolute;bottom:14px;left:0;right:0;text-align:center;color:#fff;font-size:13px;padding:0 16px;text-shadow:0 1px 4px #000;pointer-events:none}
+@media (max-width:640px){.rmx-lb{padding:0}.rmx-lb-nav{background:#0005;width:44px;height:60px;font-size:32px}}
+.rmx-picker-overlay{position:fixed;inset:0;z-index:3100;background:#000c;display:flex;align-items:center;justify-content:center;padding:24px}
+.rmx-picker{position:relative;background:#141416;border:1px solid #38383a;border-radius:14px;width:100%;max-width:1000px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden}
+.rmx-picker-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #2c2c2e;font-size:13px;text-transform:capitalize}
+.mb{display:flex;flex-direction:column;min-height:0;flex:1}
+.mb-toolbar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #2c2c2e;flex:none;flex-wrap:wrap}
+.mb-roots{display:flex;gap:2px;background:#0a0a0a;border:1px solid #2c2c2e;border-radius:8px;padding:2px;flex:none}
+.mb-roots button{background:none;border:none;color:#8e8e93;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px}
+.mb-roots button.on{background:#2c2c2e;color:#f2f2f7}
+.mb-roots button:disabled{opacity:.4;cursor:default}
+.mb-search{flex:1;min-width:80px}
+.mb-grid{display:flex;flex-wrap:wrap;gap:6px;padding:12px;overflow:auto;align-content:flex-start;flex:1;min-height:0}
+.mb-cell{position:relative;height:150px;border:1px solid #2c2c2e;border-radius:8px;overflow:hidden;cursor:pointer;background:#1c1c1e;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.mb-cell:hover{border-color:#0a84ff}
+.mb-cell.sel{border-color:#0a84ff;box-shadow:0 0 0 2px #0a84ff inset}
+.mb-tick{position:absolute;top:5px;left:5px;width:19px;height:19px;accent-color:#0a84ff;cursor:pointer;z-index:3;margin:0}
+.mb-selbar{display:flex;align-items:center;gap:10px;padding:9px 12px;border-top:1px solid #2c2c2e;font-size:12.5px;flex:none}
+.rmx-warn{margin:-6px 0 12px;padding:8px 10px;border:1px solid #ff9f0a55;background:#ff9f0a14;color:#ffb340;border-radius:7px;font-size:12px;line-height:1.5}
+.rmx-picked{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;flex-basis:100%}
+.rmx-picked-cell{position:relative;width:56px;height:56px;border:1px solid #2c2c2e;border-radius:6px;overflow:hidden;background:#1c1c1e}
+.rmx-picked-cell img{width:100%;height:100%;object-fit:cover;display:block}
+.rmx-picked-x{position:absolute;top:1px;right:1px;background:#000c;border:none;color:#fff;width:16px;height:16px;line-height:1;border-radius:50%;font-size:10px;cursor:pointer;padding:0}
+.mb-cell img{height:100%;width:auto;display:block}
+.mb-cell.folder{width:130px}
+.mb-folder-ico{font-size:34px}
+.mb-cap{position:absolute;left:0;right:0;bottom:0;padding:2px 6px;font-size:10px;background:linear-gradient(transparent,#000d);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none}
+.mb-words{position:absolute;inset:0;background:#000b;display:flex;align-items:flex-start;justify-content:center;padding:56px 16px 16px;z-index:2}
+.mb-words-panel{background:#1c1c1e;border:1px solid #38383a;border-radius:12px;width:100%;max-width:440px;max-height:72vh;display:flex;flex-direction:column;padding:12px}
+.mb-words-list{overflow:auto;display:flex;flex-direction:column}
+.mb-word{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;font-size:13px;cursor:pointer;border-bottom:1px solid #2c2c2e;color:#c7c7cc}
+.mb-word:hover{background:#0a84ff1a;color:#fff}
+@media (max-width:640px){.rmx-overlay{padding:0}.rmx-dialog{max-width:100%;max-height:100%;height:100%;border-radius:0;border:0}.rmx-picker-overlay{padding:0}.rmx-picker{max-width:100%;max-height:100%;height:100%;border-radius:0}}

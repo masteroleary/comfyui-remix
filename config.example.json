@@ -1,0 +1,14 @@
+{
+  "port": 8080,
+  "httpsPort": 8443,
+  "mediaDir": "C:/path/to/media",
+  "comfyDir": "C:/path/to/ComfyUI",
+  "comfyOutput": "C:/path/to/ComfyUI/output",
+  "comfyUrl": "http://127.0.0.1:8188",
+  "comfyStartCmd": "C:/path/to/ComfyUI/Start ComfyUI.bat",
+  "civitaiApiKey": "",
+  "auth": {
+    "enabled": false,
+    "hash": ""
+  }
+}

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<title>ComfyRemix</title>
+<link rel="stylesheet" href="/common.css">
+<link rel="stylesheet" href="/app.css">
+<!-- Per-component styles. Split alongside the components rather than kept as one
+     928-line block, which is what the pre-SPA page carried. -->
+<link rel="stylesheet" href="/app/styles/toolbar.css">
+<link rel="stylesheet" href="/app/styles/viewer.css">
+<link rel="stylesheet" href="/app/styles/dialogs.css">
+<link rel="stylesheet" href="/app/styles/remix.css">
+<link rel="stylesheet" href="/app/styles/inspect.css">
+</head>
+<body>
+<!-- The whole app. One root, one router — every view renders inside AppShell.
+     The page is a shell on purpose: markup lives with the component that owns it
+     (app/components, app/views), not in one enormous document. -->
+<div id="app"></div>
+
+<script src="/vendor/vue.global.prod.js"></script>
+<script src="/vendor/vue-router.global.prod.js"></script>
+<script src="/ui-guards.js"></script>
+<script type="module" src="/app/main.js"></script>
+</body>
+</html>

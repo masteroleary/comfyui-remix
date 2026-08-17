@@ -1,0 +1,14 @@
+{
+  "name": "comfy-remix",
+  "license": "CC-BY-NC-4.0",
+  "version": "1.0.0",
+  "description": "Local browser, curator, and remixer for AI-generated media from ComfyUI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js 8080",
+    "restart": "node restart.js"
+  },
+  "keywords": ["media-browser", "comfyui", "stable-diffusion", "workflow", "remix"],
+  "private": true
+}

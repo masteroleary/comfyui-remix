@@ -1,0 +1,296 @@
+/* ── Dialogs ────────────────────────────────────────────────────────────────
+   Settings, Move, Merge and the server-side folder picker. Lifted out of the
+   pre-SPA page's one <style> block, with the rules that used to be typed inline
+   on the markup (sheet sizing, section headings, chips, tree/picker rows) given
+   real class names — the components render templates, not innerHTML, so there is
+   nowhere sensible for a 90-character style attribute to live any more.
+   Design tokens come from common.css; .loading/.spinner and @keyframes spin come
+   from app.css and are used as-is here. */
+
+/* ── Settings as a route (no overlay, no sheet) ── */
+/* The panel keeps its own inner markup; these two only replace the centring
+   overlay and the floating sheet it used to sit in. */
+.set-page{display:block}
+.set-page-body{max-width:720px;margin:0 auto}
+.set-view-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.set-view-back{
+  background:var(--surface2);border:1px solid var(--border);color:var(--accent);
+  border-radius:var(--r-sm);padding:6px 12px;font:inherit;font-size:14px;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;white-space:nowrap;
+}
+.set-view-back:active{opacity:.6}
+.set-view-title{font-size:17px;font-weight:600;color:var(--text)}
+
+/* ── Media cache radio list (Privacy) ── */
+.cache-opts{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.cache-opt{
+  display:flex;align-items:flex-start;gap:10px;padding:10px 12px;cursor:pointer;
+  background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm);
+}
+/* The selected row is outlined rather than filled: these sit above the NSFW tag
+   chips, and a filled row read as a chip rather than a choice. */
+.cache-opt.on{border-color:var(--accent)}
+.cache-opt input{margin-top:2px;flex:none;accent-color:var(--accent)}
+.cache-txt{display:flex;flex-direction:column;gap:2px;font-size:13px;color:var(--text)}
+.cache-sub{font-size:11px;color:var(--text3);line-height:1.4}
+
+/* ── Tabs (Config | Privacy | Security) ── */
+.file-tabs{
+  display:flex;gap:4px;
+  padding:8px calc(12px + var(--safe-l)) 0 calc(12px + var(--safe-l));
+  border-bottom:1px solid var(--surface2);
+}
+.file-tab{
+  flex:1;min-width:0;
+  background:none;border:none;border-bottom:2px solid transparent;
+  color:var(--text2);font-size:14px;font-weight:600;
+  padding:9px 6px;cursor:pointer;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;
+}
+.file-tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.file-tab:active{opacity:.6}
+
+/* ── Confirm dialog / shared sheet chrome ── */
+.confirm-overlay{
+  display:none;position:fixed;inset:0;z-index:300;
+  background:rgba(0,0,0,.7);align-items:flex-end;justify-content:center;
+  padding-bottom:var(--safe-b);
+}
+.confirm-overlay.open{display:flex}
+/* Sheets that are tall enough to want centring rather than docking to the
+   bottom edge (Settings, the folder picker). */
+.confirm-overlay.center{align-items:center}
+/* The picker opens on top of Settings, so it needs to outrank it. */
+.confirm-overlay.above{z-index:310}
+.confirm-sheet{
+  width:100%;max-width:480px;background:var(--surface);
+  border-radius:var(--r) var(--r) 0 0;padding:20px 20px calc(16px + var(--safe-b));
+}
+.confirm-title{font-size:17px;font-weight:600;margin-bottom:6px}
+.confirm-msg{font-size:14px;color:var(--text2);margin-bottom:18px;word-break:break-all}
+.confirm-btns{display:flex;gap:10px}
+.confirm-btns button{
+  flex:1;padding:13px;border-radius:var(--r-sm);border:none;
+  font-size:15px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.confirm-btns button:active{opacity:.7}
+.btn-cancel{background:var(--surface2);color:var(--text)}
+.btn-ok{background:var(--red);color:#fff}
+.btn-ok.btn-fav{background:var(--amber);color:#000}
+.btn-ok.btn-move{background:var(--accent);color:#fff}
+.btn-ok.btn-accent{background:var(--accent);color:#fff}
+.confirm-btns button:disabled{opacity:.4;cursor:not-allowed}
+
+/* ── Move dialog (destination folder tree) ── */
+/* Taller sibling of .confirm-sheet: the tree scrolls, the title and the
+   button row stay pinned, and the sheet never outgrows the viewport. */
+.tree-sheet{
+  width:100%;max-width:520px;background:var(--surface);
+  border-radius:var(--r) var(--r) 0 0;padding:18px 18px calc(14px + var(--safe-b));
+  display:flex;flex-direction:column;max-height:82vh;
+}
+.tree-dest{font-size:12px;color:var(--text2);margin-bottom:10px;word-break:break-all}
+.tree-dest .tree-dest-hint{color:var(--text3)}
+.tree-box{
+  flex:1;min-height:160px;overflow:auto;-webkit-overflow-scrolling:touch;
+  background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);
+  padding:6px 0;margin-bottom:12px;
+}
+.tree-row{
+  display:flex;align-items:center;gap:6px;padding:7px 10px;
+  font-size:14px;color:var(--text);cursor:pointer;user-select:none;
+  -webkit-tap-highlight-color:transparent;
+}
+.tree-row:hover{background:var(--surface2)}
+.tree-row.sel,.tree-row.sel:hover{background:var(--accent);color:#fff}
+.tree-row.dis,.tree-row.dis:hover{opacity:.3;cursor:not-allowed;background:none}
+.tree-caret{
+  flex:0 0 18px;width:18px;height:18px;display:flex;align-items:center;justify-content:center;
+  color:var(--text3);
+}
+.tree-caret svg{transition:transform .15s}
+.tree-caret.open svg{transform:rotate(90deg)}
+.tree-emoji{font-size:15px;line-height:1}
+.tree-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tree-spin{
+  display:inline-block;width:11px;height:11px;border:2px solid var(--text3);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;
+}
+.tree-err{font-size:13px;color:var(--red);margin-bottom:10px;word-break:break-all}
+/* New Folder: a button row that swaps in place for the name input. */
+.tree-mk-row{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.tree-mk-btn{
+  background:var(--surface2);color:var(--text);border:1px solid var(--border);
+  border-radius:var(--r-sm);padding:8px 12px;font-size:13px;font-weight:600;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.tree-mk-btn:hover:not(:disabled){background:var(--surface3)}
+.tree-mk-btn:disabled{opacity:.4;cursor:not-allowed}
+.tree-mk-hint{font-size:11px;color:var(--text3)}
+.tree-mk{display:flex;gap:8px;margin-bottom:12px}
+.tree-mk input{
+  flex:1;min-width:0;background:var(--bg);color:var(--text);
+  border:1px solid var(--accent);border-radius:var(--r-sm);
+  padding:9px 12px;font-size:14px;font-family:inherit;outline:none;
+}
+.tree-mk button{
+  border:none;border-radius:var(--r-sm);padding:9px 14px;
+  font-size:13px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.tree-mk button:disabled{opacity:.4;cursor:not-allowed}
+.tree-mk-go{background:var(--accent);color:#fff}
+.tree-mk-x{background:var(--surface2);color:var(--text2)}
+
+/* ── Merge videos dialog (order the clips, then join them) ── */
+/* Reuses .tree-sheet's pinned-title / scrolling-middle shape. */
+.vm-note{font-size:12px;color:var(--text2);margin-bottom:10px;word-break:break-all}
+.vm-note b{color:var(--text);font-weight:600}
+.vm-list{
+  flex:1;min-height:140px;overflow:auto;-webkit-overflow-scrolling:touch;
+  background:var(--bg);border:1px solid var(--border);border-radius:var(--r-sm);
+  padding:4px;margin-bottom:12px;
+}
+.vm-row{
+  display:flex;align-items:center;gap:10px;padding:6px;border-radius:var(--r-sm);
+  border-top:2px solid transparent;border-bottom:2px solid transparent;
+  user-select:none;-webkit-tap-highlight-color:transparent;
+}
+.vm-row + .vm-row{margin-top:2px}
+/* The dragged row dims in place; the DOM order is left alone until the drop, so
+   the pointer stream never loses the element it started on (a mid-drag reorder
+   re-inserts nodes, which drops touch's implicit pointer capture). */
+.vm-row.dragging{opacity:.35}
+.vm-row.drop-above{border-top-color:var(--accent)}
+.vm-row.drop-below{border-bottom-color:var(--accent)}
+.vm-num{
+  flex:0 0 20px;text-align:center;font-size:12px;font-weight:600;color:var(--text3);
+  font-variant-numeric:tabular-nums;
+}
+.vm-thumb{
+  flex:0 0 64px;width:64px;height:40px;border-radius:5px;overflow:hidden;
+  background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:16px;
+}
+.vm-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.vm-name{flex:1;min-width:0;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vm-nudge{flex:0 0 auto;display:flex;flex-direction:column;gap:1px}
+.vm-nudge button{
+  background:var(--surface2);color:var(--text2);border:none;border-radius:4px;
+  width:26px;height:17px;font-size:9px;line-height:1;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+.vm-nudge button:disabled{opacity:.25;cursor:not-allowed}
+/* touch-action:none — without it the browser claims the gesture as a scroll of
+   .vm-list and no pointermove ever reaches the drag. */
+.vm-grip{
+  flex:0 0 30px;height:34px;display:flex;align-items:center;justify-content:center;
+  color:var(--text3);font-size:15px;cursor:grab;touch-action:none;
+}
+.vm-grip:active{cursor:grabbing;color:var(--text)}
+.vm-busy{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2);margin-bottom:12px}
+.btn-ok.btn-merge{background:#e0862c;color:#000}
+
+/* ── Settings fields ── */
+.set-field{margin-bottom:10px}
+.set-field label{display:block;font-size:13px;color:var(--text);margin-bottom:4px}
+.set-row{display:flex;gap:6px}
+.set-row input{
+  flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--surface3);
+  border-radius:var(--r-sm);padding:9px 11px;font-size:14px;font-family:inherit;min-width:0;
+}
+.set-row input:focus{outline:none;border-color:var(--accent)}
+.set-row input:disabled{opacity:.5;cursor:not-allowed}
+.set-clr{
+  background:var(--surface2);border:1px solid var(--surface3);color:var(--text2);
+  border-radius:var(--r-sm);padding:0 12px;font-size:13px;cursor:pointer;
+}
+.set-clr:active{opacity:.6}
+
+/* Settings sheet chrome (was inline on the markup). */
+.set-sheet{
+  width:100%;max-width:480px;background:var(--surface);
+  border-radius:var(--r);padding:20px;max-height:88vh;overflow:auto;
+}
+.set-head{display:flex;align-items:center;margin-bottom:10px}
+.set-head .confirm-title{margin:0}
+.set-x{margin-left:auto;background:none;border:none;color:var(--text);font-size:22px;cursor:pointer;line-height:1}
+.set-tabs{margin-bottom:14px}
+.set-sec{
+  font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px;
+}
+.set-sec:first-child{margin-top:0}
+.set-hint{font-size:12px;color:var(--text3);margin-top:2px}
+.set-blurb{font-size:12px;color:var(--text3);margin-bottom:10px}
+.set-state{font-weight:400}
+.set-foot{margin-top:18px}
+/* Standalone buttons outside a .confirm-btns row (Add tag, Change, Remove):
+   .btn-ok / .btn-cancel only carry colours, so the box model lives here. */
+.set-btn{
+  border:none;border-radius:var(--r-sm);padding:8px 14px;
+  font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;
+  -webkit-tap-highlight-color:transparent;
+}
+.set-btn:active{opacity:.7}
+.set-btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* ── Privacy tab: NSFW tag chips ── */
+.nsfw-add{display:flex;gap:6px;margin-bottom:10px}
+.nsfw-add input{
+  flex:1;min-width:0;background:var(--surface2);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--r-sm);
+  padding:8px 10px;font-size:14px;font-family:inherit;outline:none;
+}
+.nsfw-list{display:flex;flex-wrap:wrap;gap:6px}
+.nsfw-chip{
+  display:inline-flex;align-items:center;gap:6px;
+  background:var(--surface2);border:1px solid var(--border);border-radius:999px;
+  padding:5px 6px 5px 11px;font-size:13px;color:var(--text);
+}
+.nsfw-chip button{
+  background:none;border:none;color:var(--text3);font-size:15px;line-height:1;
+  cursor:pointer;padding:0 2px;
+}
+.nsfw-empty{font-size:12px;color:var(--text3);padding:4px}
+
+/* ── Security tab: the password gate ── */
+.auth-warn{
+  font-size:13px;color:var(--amber);border:1px solid var(--amber);
+  border-radius:var(--r-sm);padding:10px;margin-bottom:12px;
+}
+.auth-toggle{
+  display:flex;align-items:center;gap:10px;
+  font-size:14px;color:var(--text);margin-bottom:12px;cursor:pointer;
+}
+.auth-toggle input{width:17px;height:17px;accent-color:var(--accent)}
+.auth-status{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--text);margin-bottom:12px}
+.auth-status .set-btn:first-of-type{margin-left:auto}
+.auth-note{font-size:13px;color:var(--amber);margin-bottom:12px}
+.auth-min{font-size:12px;color:var(--amber);margin-top:2px}
+.auth-foot{font-size:12px;color:var(--text3);margin-top:12px}
+.auth-set{color:var(--green);font-weight:400}
+
+/* ── Folder picker (server-side browse) ── */
+.picker-sheet{
+  width:100%;max-width:480px;background:var(--surface);
+  border-radius:var(--r);padding:20px;max-height:80vh;display:flex;flex-direction:column;
+}
+.dir-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.dir-head .confirm-title{margin:0;font-size:15px}
+.dir-nav{display:flex;gap:6px;align-items:center;margin-bottom:8px}
+.dir-up{padding:6px 12px}
+.dir-up:disabled{opacity:.4;cursor:not-allowed}
+.dir-current{flex:1;font-size:12px;color:var(--text2);word-break:break-all}
+.dir-list{
+  flex:1;overflow:auto;-webkit-overflow-scrolling:touch;
+  border:1px solid var(--surface3);border-radius:var(--r-sm);
+  min-height:200px;max-height:45vh;
+}
+.dir-row{
+  padding:9px 12px;font-size:13px;color:var(--text);cursor:pointer;
+  border-bottom:1px solid var(--surface2);-webkit-tap-highlight-color:transparent;
+}
+.dir-row:active{background:var(--surface2)}
+.dir-empty{padding:14px;font-size:12px;color:var(--text3)}
+.dir-foot{margin-top:12px}
+/* "Select this folder" is meaningless on the drive list — legacy hid it with
+   visibility so the button row keeps its shape. */
+.dir-foot .btn-ok.hidden{visibility:hidden}

@@ -1,0 +1,225 @@
+<p align="center">
+  <img src="logo.jpg" alt="ComfyUI-Remix" width="420">
+</p>
+
+# ComfyRemix
+
+Browse and curate your AI-generated media (images, video, audio), then **remix** it — rerun the workflow inside any file with a new prompt, seed, or style. Zero-dependency Node.js server + single-page front end, built to pair with [ComfyUI](https://github.com/Comfy-Org/ComfyUI).
+
+> ComfyRemix is an independent community project. It is **not affiliated with, endorsed by, or sponsored by Comfy Org, Inc.** — "ComfyUI" is the branding of Comfy Org. This app contains no ComfyUI code; it talks to your own ComfyUI install over its local API.
+>
+> **License:** [CC BY-NC 4.0](LICENSE) — free to use, share, and modify **with credit** to [masteroleary/comfy-remix](https://github.com/masteroleary/comfy-remix); **commercial use requires written consent** (webdevllc@gmail.com).
+
+- **Start:** `cd comfy-remix && npm start` → serves on **http://localhost:8080** (HTTPS on **8443**).
+- **Auto-start:** can run headless at boot as a Windows scheduled task, before any user logs in — see [Run at startup](#run-at-startup-windows).
+- **API keys / settings:** click the **⚙** button in the app header (Civitai key, the ComfyUI URL, paths, and the password gate).
+
+See [CLAUDE.md](CLAUDE.md) for architecture, API endpoints, config, and headless/remote-access guidance.
+
+---
+
+## Features
+
+The home screen is a set of tiles, with ⚙ Settings in the header. Each feature below lists what it does and what it needs to work.
+
+### 📂 Media Browser — Archive / ComfyUI Output / Favorites
+
+**What it does:** Browse your media in a responsive grid — images, video, and audio, organized by folder. Search, sort (date/name), and filter by type (folders / videos / images). Tap any item for a full-screen viewer with swipe navigation. Three entry tiles point at different roots: **Archive Media** (curated library), **ComfyUI Output** (raw generations), and **Favorites**.
+
+- **Search by name *or by prompt*** — a background index extracts the prompt text embedded in generated files, so searching "ocean" finds images whose generation prompt mentioned it, even if the filename is `Final_0042.png`. Search can also **descend into all subfolders**, grouping results under clickable folder-path shortcuts.
+- **📂 Word directory** — browse every word/phrase used across your prompts, sorted by frequency or A–Z; tap one to see all matching media.
+- **Favorite** a file to move it into `_Favorites` (or the archive root if it came from ComfyUI output).
+- **Delete** individual files, or use **☑ multi-select** / per-search-result **Select All** for bulk actions.
+- **🔒 Blur toggle** applies a privacy blur to thumbnails so the grid can be browsed discreetly on a shared screen.
+
+**Setup:** none beyond `config.json` paths — `mediaDir` (library root) and `comfyOutput` (ComfyUI's output folder).
+
+### ⚡ Jobs
+
+**What it does:** Tracks ComfyUI generation runs started from the app (see *Workflow Inspector* below) — showing running vs. completed jobs, run counts, progress, and the resulting output files. Progress is shared live across open tabs.
+
+**Setup:** none; populated automatically when you run a workflow.
+
+### 🎨 Workflow Inspector & Re-run
+
+**What it does:** Open any image or video and switch to the **Workflow** tab to see the ComfyUI workflow embedded in its metadata. From there you can **re-run** it:
+
+- **Inherited** — replays the exact workflow baked into the file.
+- **App workflows** — pick a curated workflow from the dropdown and drive it with on-screen controls: **prompt**, **seed** (📌 pin an exact seed, or randomize every run), **steps**, **LoRAs**, **frames**, and **style/quality presets**. Presets that can't run together are batched automatically (each selected preset runs as its own pass — *Presets × Runs*).
+- **📷 Use image's prompt** — copy the prompt embedded in the viewed image into the selected workflow, instead of the workflow's saved prompt.
+- **Prompt Replacements** — a saved list of find → replace word rules (each with an on/off toggle) applied to the prompt just before submission; rules are stored server-side so they follow you across devices.
+- Set a **run count** to generate multiple variations in one click; outputs appear as **live thumbnails as each run completes**, with bulk Favorite/Delete right from the results grid.
+
+**Setup:** **ComfyUI must be running** (address configurable via `comfyUrl`, default `http://127.0.0.1:8188`). Curated workflows must be enabled first (see *Manage Workflows*).
+
+### ⚙ Manage Workflows (inside the Workflow tab)
+
+**What it does:** Lists every workflow in your ComfyUI install directory with a checkbox to expose it in the app — no renaming or copying of the original files. For each enabled workflow you can set a display label and map which node is the **prompt / steps / seed** (auto-detected by convention, overridable from a dropdown). Choices are stored in a sidecar file so your original workflow `.json` files are never modified.
+
+**Setup:** none; reads directly from `comfyDir`. **Starter workflows included:** on first run the app copies the bundled examples from [default-workflows/](default-workflows/) (anime & photoreal text-to-image, image-to-image, image-to-video) into your ComfyUI workflows folder and enables them. They reference common community custom nodes (rgthree, Impact Pack, Efficiency Nodes, etc.) and placeholder model names — swap in the checkpoints/LoRAs you actually have.
+
+### ⚙ Settings
+
+**What it does:** Central place to manage credentials and service endpoints without editing files: the **Civitai** API key and the **ComfyUI** URL. Keys are shown masked (last 4 characters) and take effect immediately — no restart needed. Read-only fields show the current ports and paths.
+
+**Setup:** none — it *is* the setup surface for the features above.
+
+### 🕶 Safe mode & media caching (Settings → Privacy)
+
+**What it does:** Two privacy controls for a library you may not want fully visible. **Safe mode** — the eye in the browse bar — hides any file whose embedded prompt matches a word on your filtered-terms list, which is handy on a shared screen or when someone is looking over your shoulder. The list is yours to fill in and ships with only a few generic starters; matching is whole-word and case-insensitive, and sees through digit-for-letter spellings. **Media caching** decides how long the browser may keep thumbnails and full media it has already fetched, defaulting to never storing them on disk.
+
+**Setup:** none; both are off-by-default behaviours you turn on if you want them.
+
+### 🔒 Password protection (Settings → Security)
+
+**What it does:** Seals the whole app behind one password. With it on, every route — pages, APIs, `/file`, `/thumb`, the ComfyUI WebSocket proxy — answers with a lock screen (or `401`) until the password is entered; the box checks as you type and drops you into whatever page you asked for. A **Log out** button appears in the top bar of every page.
+
+**Setup:** ⚙ Settings → **Security** → set a password (twice, at least 7 characters — the toggle stays disabled until then) and tick *Require a password*. Only the scrypt hash is written to `config.json` — never the password. Sessions are a signed 30-day cookie, so a server restart doesn't sign anyone out, but changing or clearing the password does (every device at once). Forgot it? Clear `auth` in `config.json` on the server and restart.
+
+### External services at a glance
+
+| Feature | Needs |
+|---|---|
+| Media Browser / Favorites / Jobs | Nothing extra |
+| Workflow Inspector & Re-run | ComfyUI running (`comfyUrl`, default `127.0.0.1:8188`) |
+
+## Third-party services & data flow
+
+The app is **local-first**: your media library is served straight off your disk and never leaves the machine. External calls happen only when you actively use a feature that needs them — nothing phones home in the background.
+
+| Service | Runs | Purpose in the app | What gets sent |
+|---|---|---|---|
+| **ComfyUI** | locally | Executes image/video workflows. The app proxies HTTP + WebSocket traffic to it (`comfyUrl`) for queueing runs, streaming progress, and uploading input images. | Nothing leaves the machine |
+| **Civitai** | cloud | API key stored for authenticated model downloads (some models require an account to fetch). | Only the download requests you trigger |
+
+All API keys live in `config.json` (gitignored) and are managed via ⚙ Settings; each cloud feature detects a missing key, prompts for it on first use, and stays inactive until you provide one.
+
+---
+
+## Run at startup (Windows)
+
+Two options, depending on whether you want the app up **before anyone logs in** (headless server / remote access after a reboot) or just when you sign in.
+
+### Option A — At boot, before login (recommended for headless use)
+
+Registers a scheduled task that runs the server as **SYSTEM** at startup — the app is reachable right after a cold boot with nobody at the desk. Run in an **elevated** PowerShell (adjust the app path):
+
+```powershell
+$app      = 'C:\path\to\comfy-remix'          # <- your clone
+$node     = (Get-Command node).Source
+$action   = New-ScheduledTaskAction -Execute $node -Argument 'server.js' -WorkingDirectory $app
+$trigger  = New-ScheduledTaskTrigger -AtStartup
+$principal= New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+              -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -Hidden
+Register-ScheduledTask -TaskName 'ComfyRemixAutoStart' -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+Start-ScheduledTask -TaskName 'ComfyRemixAutoStart'    # start it now without rebooting
+```
+
+Verify: open `http://localhost:8080`, or `Get-ScheduledTask ComfyRemixAutoStart | Select State`.
+
+Notes for SYSTEM mode:
+- To restart after pulling updates: `Stop-ScheduledTask ComfyRemixAutoStart; Start-ScheduledTask ComfyRemixAutoStart` (elevated).
+- For **remote access before login** over Tailscale, also enable Tailscale's unattended mode: `reg add "HKLM\SOFTWARE\Tailscale IPN" /v UnattendedMode /t REG_SZ /d always` — otherwise the tailnet disconnects at logoff.
+
+### Option B — At your logon (no admin needed)
+
+```powershell
+$app     = 'C:\path\to\comfy-remix'
+$node    = (Get-Command node).Source
+$action  = New-ScheduledTaskAction -Execute $node -Argument 'server.js' -WorkingDirectory $app
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+Register-ScheduledTask -TaskName 'ComfyRemixAutoStart' -Action $action -Trigger $trigger
+```
+
+> Use **one option, not both** — two instances fight over port 8080 (`EADDRINUSE`). Remove with `Unregister-ScheduledTask -TaskName 'ComfyRemixAutoStart'`.
+
+On Linux/macOS the equivalent is a `systemd` user unit or `launchd` plist running `node server.js` in the app directory.
+
+---
+
+## Accessing it privately over Tailscale
+
+The app is deliberately **not exposed to the LAN or the public internet**. Your host firewall blocks inbound 8080/8443 except from **localhost** and the **Tailscale** network (setup commands below). Tailscale is a private mesh VPN (WireGuard): only devices signed in to *your* tailnet can reach this machine, and the traffic is end-to-end encrypted. Nothing is port-forwarded and there's no public URL.
+
+This machine's Tailscale identity:
+
+| | |
+|---|---|
+| Machine name | `<machine>` (yours will differ) |
+| MagicDNS name | `<machine>.<your-tailnet>.ts.net` |
+| Tailscale IP | `100.x.y.z` |
+| Ports | `8080` (HTTP), `8443` (HTTPS) |
+
+### Lock down the host firewall
+
+This is the one-time host-side step that makes the app Tailscale-only: allow inbound 8080/8443 **only** from the Tailscale address ranges (localhost is always implicitly allowed), and block everything else. The ranges are the same on every platform:
+
+- IPv4 (CGNAT): `100.64.0.0/10`
+- IPv6 (ULA): `fd7a:115c:a1e0::/48`
+
+> **Windows only.** Run the commands below in an **elevated** PowerShell. macOS/Linux users: skip to the note underneath — the concept is identical, only the tool differs.
+
+```powershell
+# Windows — allow 8080/8443 in only from the Tailscale ranges
+$ts = '100.64.0.0/10','fd7a:115c:a1e0::/48'
+New-NetFirewallRule -DisplayName 'ComfyRemix HTTP 8080'  -Direction Inbound -Action Allow `
+  -Protocol TCP -LocalPort 8080 -RemoteAddress $ts
+New-NetFirewallRule -DisplayName 'ComfyRemix HTTPS 8443' -Direction Inbound -Action Allow `
+  -Protocol TCP -LocalPort 8443 -RemoteAddress $ts
+Set-NetFirewallProfile -All -DefaultInboundAction Block   # deny anything not explicitly allowed (usually already the Windows default)
+```
+
+Verify the rules are scoped to Tailscale (read-only):
+
+```powershell
+'ComfyRemix HTTP 8080','ComfyRemix HTTPS 8443' | ForEach-Object {
+  $r = Get-NetFirewallRule -DisplayName $_
+  [pscustomobject]@{ Rule = $_; Enabled = $r.Enabled
+    Remote = (($r | Get-NetFirewallAddressFilter).RemoteAddress -join ',') }
+} | Format-Table -Auto
+```
+
+**macOS / Linux:** apply the same rule with your own firewall — allow inbound TCP 8080/8443 from the two ranges above, deny elsewhere.
+- **Linux (ufw):** `sudo ufw default deny incoming`, then `sudo ufw allow proto tcp from 100.64.0.0/10 to any port 8080,8443` (repeat with the IPv6 range).
+- **macOS:** add `pf` rules pinned to the same ranges (`/etc/pf.conf`), or turn on the built-in Application Firewall and only allow `node`.
+- **Any OS, defense in depth:** the server currently binds `0.0.0.0` (all interfaces). Changing the two `server.listen(..., '0.0.0.0', ...)` calls in `server.js` to the host's Tailscale IP makes it never listen on the LAN at all — optional, on top of the firewall rule above.
+
+### One-time setup on the device you want to browse from (phone, laptop, tablet)
+
+1. **Install Tailscale** on the client device:
+   - iOS / Android: "Tailscale" in the App Store / Play Store
+   - macOS / Windows / Linux: https://tailscale.com/download
+2. **Sign in with the same account** that owns this machine. The device joins your tailnet.
+3. Make sure Tailscale is **connected/enabled** on that device (toggle it on).
+
+That's it — no config on this machine is needed; it's already on the tailnet in unattended mode (stays connected across reboots, even before anyone logs in).
+
+### Open the app
+
+From any device on the tailnet, open a browser to:
+
+- **http://<machine>.<your-tailnet>.ts.net:8080** ← recommended (MagicDNS name)
+- or **http://100.x.y.z:8080** (raw Tailscale IP, works even if MagicDNS is off)
+
+For HTTPS use **https://<machine>.<your-tailnet>.ts.net:8443**. The certificate is self-signed, so the browser will show a one-time "not private" warning — accept it to proceed. (HTTP on 8080 is fine over Tailscale since the tunnel itself is already encrypted.)
+
+> Tip: on a phone, add the URL to your home screen for an app-like shortcut.
+
+### Why this is private
+
+- **Firewall pinned to Tailscale ranges.** Inbound rules for 8080/8443 only allow the Tailscale address ranges (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), so even a device on the same Wi-Fi/LAN cannot connect.
+- **No public exposure.** No router port-forwarding, no public DNS, no `tailscale funnel`. Off the tailnet, the machine is unreachable.
+- **Reachable pre-login.** Tailscale runs in unattended mode and the app starts at boot (on Windows, as a SYSTEM scheduled task; `systemd`/`launchd` on Linux/macOS — see [Run at startup](#run-at-startup-windows)), so it's available after a cold reboot without anyone logging in at the desk.
+
+### Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Page won't load | Tailscale is **connected** on the client device (open the Tailscale app, confirm it's on). |
+| Still won't load | In the Tailscale admin console (login.tailscale.com), confirm this machine shows as **online**. |
+| MagicDNS name fails but IP works | MagicDNS may be disabled for your tailnet — use `http://100.x.y.z:8080`, or enable MagicDNS in the admin console (DNS tab). |
+| Works on Wi-Fi at home only | That means you're hitting it over the LAN, not Tailscale — it should work from *anywhere* the client has Tailscale on. Turn off Wi-Fi to test over cellular. |
+| HTTPS warning | Expected (self-signed cert). Accept the warning, or just use the `http://…:8080` URL. |
+
+For the generic approach to headless startup and locking access down to your VPN, see the **Running headless / at startup** and **Remote access hardening** sections of [CLAUDE.md](CLAUDE.md).

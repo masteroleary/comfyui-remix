@@ -1,0 +1,206 @@
+/* ── Toolbar + pager ────────────────────────────────────────────────────────
+   Ported from the pre-SPA page's <style> block (.hdr*, .filter-bar, .file-tab*,
+   .blur-btn, .back-btn, .home-btn, .search-*, .sort-btn, .filter-chip, .stats,
+   .pager, .pg-*). Rules are copied unchanged except where a note says otherwise;
+   design tokens still come from common.css. Loaded by AppToolbar.js itself, so
+   the stylesheet arrives with the component rather than being a standing entry
+   in index.html for a component that only renders on browse routes. */
+
+/* ── HEADER ── */
+/* The component root must not form a box: a sticky child can only travel inside
+   its parent, and the toolbar is only ~190px tall, so the header would unstick
+   and scroll away almost immediately. display:contents hands the stack to the
+   shell, letting it pin for the whole page. (Was #toolbarApp before the port.) */
+.toolbar{display:contents}
+/* Header + filter/select bars pin together as one block, so the filter row
+   stays reachable while scrolling without hard-coding the header's height. */
+.hdr-stack{
+  position:sticky;top:0;z-index:50;
+  background:rgba(13,13,13,.92);
+  backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid var(--border);
+}
+.hdr{
+  padding:calc(10px + var(--safe-t)) calc(12px + var(--safe-r)) 10px calc(12px + var(--safe-l));
+}
+.hdr-path{margin-bottom:6px;overflow:hidden}
+.hdr-row1{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.hdr-row2{display:flex;gap:8px}
+.home-btn{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  background:var(--surface2);border:none;color:var(--accent);
+  padding:7px 0;border-radius:var(--r-sm);font-size:16px;cursor:pointer;
+}
+.home-btn:active{opacity:.6}
+
+.back-btn{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:4px;
+  background:var(--surface2);border:none;color:var(--accent);
+  padding:7px 0;border-radius:var(--r-sm);font-size:15px;font-weight:500;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;white-space:nowrap;
+}
+.back-btn:active{opacity:.6}
+.back-btn[disabled]{display:none}
+
+.path-wrap{flex:1;min-width:0}
+.path-txt{font-size:12px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.path-txt b{color:var(--text)}
+
+.blur-btn{
+  flex:1;display:flex;align-items:center;justify-content:center;
+  background:var(--surface2);border:none;color:var(--text2);
+  height:36px;border-radius:var(--r-sm);font-size:18px;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.blur-btn:active{opacity:.6}
+.blur-btn.active{background:var(--accent);color:#fff}
+/* Safe mode reads as "on" in green rather than accent blue, so it can't be
+   confused with the blur toggle beside it. (Was #safeToggle.active — the SPA
+   has no ids, so it is a modifier class now.) */
+.blur-btn.safe.active{background:var(--green,#30d158);color:#fff}
+
+.search-inp{
+  flex:1;background:var(--surface2);border:1px solid var(--border);
+  color:var(--text);padding:8px 12px;border-radius:var(--r-sm);
+  font-size:16px;outline:none;-webkit-appearance:none;
+}
+.search-inp:focus{border-color:var(--accent)}
+.search-inp::placeholder{color:var(--text3)}
+.search-inp::-webkit-search-cancel-button{display:none}
+.search-wrap{position:relative;flex:1;display:flex}
+.search-wrap .search-inp{width:100%;padding-right:34px}
+/* display:block, not none: visibility is v-show's job now. v-show only ever
+   sets/clears an inline display, so a `display:none` base rule would keep the
+   button hidden even when Vue means to show it. */
+.search-clear{
+  display:block;position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  background:none;border:none;color:var(--text3);font-size:15px;cursor:pointer;
+  padding:6px 9px;-webkit-tap-highlight-color:transparent;
+}
+.search-clear:active{opacity:.5}
+
+.sort-btn{
+  flex-shrink:0;background:var(--surface2);border:1px solid var(--border);
+  color:var(--text2);padding:8px 11px;border-radius:var(--r-sm);
+  font-size:13px;cursor:pointer;-webkit-tap-highlight-color:transparent;white-space:nowrap;
+}
+.sort-btn:active{opacity:.6}
+
+/* ── FILTER BAR ── */
+.filter-bar{
+  display:flex;gap:6px;
+  padding:8px calc(12px + var(--safe-l)) 8px calc(12px + var(--safe-l));
+  overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;
+}
+.filter-bar::-webkit-scrollbar{display:none}
+/* The chips that open with Filters, and the bulk-action row — grouped so the
+   row scrolls as one unit. (Was an inline style on the wrapper div.) */
+.filter-group{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.bulk-group{display:flex;gap:6px;align-items:center}
+
+.file-tabs{
+  display:flex;gap:4px;
+  padding:8px calc(12px + var(--safe-l)) 0 calc(12px + var(--safe-l));
+  border-bottom:1px solid var(--surface2);
+}
+.file-tab{
+  flex:1;min-width:0;
+  background:none;border:none;border-bottom:2px solid transparent;
+  color:var(--text2);font-size:14px;font-weight:600;
+  padding:9px 6px;cursor:pointer;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;
+}
+.file-tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.file-tab:active{opacity:.6}
+
+.filter-chip{
+  flex-shrink:0;display:flex;align-items:center;gap:5px;
+  background:var(--surface2);border:1px solid var(--border);
+  color:var(--text2);padding:5px 12px;border-radius:20px;
+  font-size:13px;font-weight:500;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;transition:all .15s;
+}
+.filter-chip.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.filter-chip:active{opacity:.7}
+/* Bulk actions that don't apply to the current mix of files/folders stay
+   visible but inert, so the reason (see title=) is discoverable. */
+.filter-chip:disabled{opacity:.35;cursor:not-allowed}
+.filter-chip:disabled:active{opacity:.35}
+/* Per-action tints — inline styles on the bulk buttons before the port. */
+.filter-chip.bulk{font-size:12px}
+.filter-chip.bulk-merge{background:#1e3a5a;color:#6cb6e0}
+.filter-chip.bulk-vmerge{background:#4a2a16;color:#e0a86c}
+.filter-chip.bulk-move{background:#3a2456;color:#c09ce0}
+.filter-chip.bulk-fav{background:#2d5a1e;color:#a8e06c}
+.filter-chip.bulk-del{background:#5a1e1e;color:#e06c6c}
+
+/* ── STATS ── */
+.stats{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:6px calc(14px + var(--safe-l)) 4px calc(14px + var(--safe-l));
+  font-size:12px;color:var(--text3);
+}
+
+/* ── PAGINATION ── */
+.pager{
+  display:flex;justify-content:center;align-items:center;
+  gap:5px;padding:18px calc(12px + var(--safe-l));flex-wrap:wrap;
+}
+.pg-btn{
+  background:var(--surface2);border:1px solid var(--border);color:var(--text);
+  min-width:40px;height:40px;border-radius:8px;font-size:14px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  padding:0 10px;-webkit-tap-highlight-color:transparent;
+}
+.pg-btn:active{opacity:.6}
+.pg-btn.cur{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.pg-btn[disabled]{opacity:.3;cursor:default}
+.pg-dots{color:var(--text3);padding:0 4px;line-height:40px;font-size:14px}
+
+/* ── PROMPT WORDS ──────────────────────────────────────────────────────────
+   The word directory used the page's shared .confirm-overlay / .confirm-sheet,
+   which have not been ported yet. Rather than claim those names from here, the
+   panel carries its own — same geometry, no collision with the shared dialog
+   when it lands. */
+.words-overlay{
+  position:fixed;inset:0;z-index:300;display:flex;
+  background:rgba(0,0,0,.7);align-items:center;justify-content:center;
+  padding-bottom:var(--safe-b);
+}
+.words-sheet{
+  width:100%;max-width:480px;background:var(--surface);
+  border-radius:var(--r);padding:12px 12px calc(12px + var(--safe-b));
+  /* dvh after vh: on iOS Safari 1vh is a slice of the LARGE viewport, so 85vh
+     measures taller than what is actually on screen while the URL bar is up,
+     and a centred sheet loses its header off the top edge. dvh tracks the
+     visible box; browsers without it keep the vh line. */
+  max-height:85vh;max-height:85dvh;
+  display:flex;flex-direction:column;
+}
+/* Header and tools must never be the parts that give way — the close button
+   lives up here. */
+.words-hdr{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex:none}
+.words-title{font-size:15px;font-weight:600}
+.words-count{font-size:12px;color:var(--text3)}
+.words-close{margin-left:auto;background:none;border:none;color:var(--text);font-size:20px;cursor:pointer}
+.words-tools{display:flex;gap:6px;margin-bottom:8px;flex:none}
+.words-filter{
+  flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--border);
+  border-radius:var(--r-sm);padding:8px 10px;font-size:14px;outline:none;
+}
+/* min-height:0, not 240px. A flex item will not shrink past its min-height, so
+   a 240px floor meant header + tools + list could add up taller than the sheet's
+   own max-height on a short screen; the overflow went out both ends of the
+   centred sheet and took the close button with it. 0 lets this be the part that
+   scrolls, which is what overflow:auto is here for. */
+.words-list{flex:1;min-height:0;overflow:auto;border:1px solid var(--surface3);border-radius:var(--r-sm)}
+.words-row{
+  display:flex;align-items:center;gap:8px;padding:9px 12px;
+  font-size:13px;color:var(--text);cursor:pointer;border-bottom:1px solid var(--surface2);
+}
+.words-row:active{opacity:.6}
+.words-row .words-term{flex:1;word-break:break-all}
+.words-row .words-n{color:var(--text3);flex:none}
+.words-empty{padding:16px;font-size:12px;color:var(--text3)}
+.words-error{padding:16px;font-size:12px;color:var(--red)}

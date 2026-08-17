@@ -1,0 +1,63 @@
+/* ComfyRemix — shared theme tokens + base reset.
+   Linked by every page BEFORE its own <style>, so page styles can override.
+   Scrollbar styling is intentionally page-local. */
+:root{
+  --bg:#0d0d0d;--surface:#1c1c1e;--surface2:#2c2c2e;--surface3:#3a3a3c;
+  --border:#38383a;--text:#f2f2f7;--text2:#8e8e93;--text3:#636366;
+  --accent:#0a84ff;--red:#ff453a;--green:#30d158;--amber:#ffd60a;--purple:#bf5af2;
+  --folder:#ffd60a;--video:#ff453a;--image:#30d158;--audio:#bf5af2;
+  --r:10px;--r-sm:7px;
+  --safe-t:env(safe-area-inset-top,0px);
+  --safe-b:env(safe-area-inset-bottom,0px);
+  --safe-l:env(safe-area-inset-left,0px);
+  --safe-r:env(safe-area-inset-right,0px);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+/* ── No page zoom, no horizontal page scroll ──────────────────────────────
+   The app is a viewport-width shell: nothing should ever pan sideways, and
+   pinch/double-tap zoom just strands the sticky header off-screen.
+
+   overflow-x:CLIP, not hidden — `hidden` would make the root a scroll
+   container and unstick .hdr-stack / .top-bar. `clip` pairs legally with
+   overflow-y:visible, so the viewport stays the scroller. (Needs Safari 16+;
+   older Safari simply keeps the horizontal scrollbar rather than breaking.)
+
+   touch-action:pan-x pan-y kills pinch + double-tap zoom while leaving both
+   pan axes alive, so inner scrollers (.folder-chips, code <pre>) still swipe.
+   The rest of the zoom story — iOS Safari ignores user-scalable=no — is in
+   ui-guards.js. */
+html{
+  overflow-x:clip;
+  overscroll-behavior-x:none;
+  -webkit-text-size-adjust:100%;text-size-adjust:100%;
+}
+body{
+  overflow-x:clip;
+  overscroll-behavior-x:none;
+  touch-action:pan-x pan-y;
+  /* The tokens above are only tokens until something paints with them. Without
+     these two the page falls back to the browser default -- white ground, black
+     text -- while every component keeps rendering in dark-theme colours. */
+  background:var(--bg);
+  color:var(--text);
+  /* inspect.html carried this stack in its own <style>; the SPA never got one,
+     so index.html fell through to the browser default -- Times New Roman on iOS
+     Safari. Setting it here also gives the many `font-family:inherit` rules in
+     the component sheets something real to inherit. No webfont: -apple-system
+     resolves to SF Pro on iOS/macOS and Segoe UI Variable on Windows 11, which
+     beats anything shippable at zero bytes and zero requests. */
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text",
+              "Segoe UI",system-ui,Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+}
+
+/* ── Logout button ──────────────────────────────────────────────────────────
+   Hidden until auth-ui.js confirms a password is actually in use. The switch is
+   a class on <html> rather than the button's own style because index.html's copy
+   lives inside a Vue in-DOM template: Vue throws the original node away on mount
+   and builds a fresh one, taking any inline style we'd set with it. Hiding from
+   an ancestor also lets each page keep its own display value (.blur-btn is a
+   flex child, .btn is inline-flex) instead of forcing one on all of them. */
+html:not(.auth-on) #logoutBtn{display:none!important}

@@ -1,0 +1,36 @@
+# Media content (large files, user-specific).
+# Everything is ignored except the bundled demo image — new files dropped
+# anywhere under Media/ stay untracked.
+Media/**
+!Media/Anima_Demo.png
+
+# Config with API keys
+config.json
+claude-conversations.json
+
+# OS files
+desktop.ini
+Thumbs.db
+.DS_Store
+
+# Node
+node_modules/
+certs/
+
+# Local setup/maintenance scripts and run logs (machine-specific)
+scripts/
+# Claude Code project config: the reusable reviewer ships with the repo, the
+# permission grants (machine-specific, incl. bypassPermissions) do not.
+# Must be `.claude/*`, not `.claude/`, or the negations below can't re-include
+# anything — git won't descend into an excluded directory.
+.claude/*
+!.claude/agents/
+!.claude/skills/
+app-workflows.json
+app-replacements.json
+app-prompt-index.json
+debug-results.json
+Workflows/
+
+# Machine-specific runbook (real paths, task names, firewall rules)
+CLAUDE.local.md

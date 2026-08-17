@@ -1,0 +1,109 @@
+/* ── App chrome ─────────────────────────────────────────────────────────────
+   Styles that belong to the shell rather than to any one view. The 928-line
+   <style> block from the pre-SPA page is being split up alongside its components
+   as each is ported; design tokens stay in common.css, shared by every page. */
+
+.app-shell{min-height:100dvh;display:flex;flex-direction:column}
+
+/* Loading / suspense fallback */
+.loading{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:48px 16px;color:var(--text2);font-size:14px;
+}
+.spinner{
+  width:18px;height:18px;border-radius:50%;
+  border:2px solid var(--surface3);border-top-color:var(--accent);
+  animation:spin .7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Toast */
+.toast{
+  position:fixed;left:50%;bottom:calc(24px + var(--safe-b));transform:translateX(-50%);
+  background:var(--surface2);color:var(--text);border:1px solid var(--border);
+  border-radius:999px;padding:10px 18px;font-size:14px;z-index:500;
+  max-width:min(92vw,520px);text-align:center;box-shadow:0 8px 24px rgba(0,0,0,.45);
+}
+.toast-enter-active,.toast-leave-active{transition:opacity .18s,transform .18s}
+.toast-enter-from,.toast-leave-to{opacity:0;transform:translate(-50%,8px)}
+
+/* Logout — shell-level, so it is no longer duplicated into four page headers */
+.shell-logout{
+  position:fixed;top:calc(10px + var(--safe-t));right:12px;z-index:400;
+  background:var(--surface2);border:1px solid var(--border);color:var(--text2);
+  width:36px;height:36px;border-radius:var(--r-sm);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+}
+.shell-logout:active{opacity:.6}
+
+/* Settings, for the routes the toolbar doesn't cover. Sits left of logout when
+   both are up. */
+/* A router-link now, not a button — settings is a route. text-decoration has to
+   be said explicitly or the gear picks up the default underline. */
+.shell-settings{
+  position:fixed;top:calc(10px + var(--safe-t));right:12px;z-index:400;
+  background:var(--surface2);border:1px solid var(--border);color:var(--text2);
+  width:36px;height:36px;border-radius:var(--r-sm);cursor:pointer;font-size:17px;
+  display:flex;align-items:center;justify-content:center;text-decoration:none;
+}
+.shell-settings:active{opacity:.6}
+html.auth-on .shell-settings{right:56px}
+
+/* ── Grid (browse) ────────────────────────────────────────────────────────── */
+.grid{
+  display:grid;gap:10px;padding:12px;
+  grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+}
+.card{
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  padding:8px;aspect-ratio:1;overflow:hidden;cursor:pointer;color:var(--text);
+  font:inherit;text-align:center;
+}
+.card:active{opacity:.7}
+.card-thumb{flex:1;min-height:0;width:100%;object-fit:cover;border-radius:var(--r-sm)}
+.card-icon{flex:1;display:flex;align-items:center;justify-content:center;font-size:34px}
+.card-name{
+  width:100%;font-size:12px;color:var(--text2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+
+/* ── Home tiles ───────────────────────────────────────────────────────────── */
+.home{padding:16px}
+/* Dark text on a white ground, so it is framed as a card rather than laid on
+   the page — a bare white rectangle on #0d0d0d reads as a failed load. The
+   intrinsic width/height are on the tag so the tiles below do not jump when it
+   finishes loading. */
+.home-logo{
+  display:block;width:100%;max-width:320px;height:auto;
+  margin:0 auto 18px;border-radius:var(--r);
+}
+.home-tiles{
+  display:grid;gap:12px;max-width:720px;margin:0 auto;
+  grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+}
+/* Icon on the left, label over sub on the right. Grid rather than nested flex
+   so the three spans stay flat siblings in the template: the icon claims one
+   column across both rows, the text stacks in the other. */
+.home-tile{
+  display:grid;
+  grid-template-columns:auto 1fr;
+  grid-template-areas:"icon label"
+                      "icon sub";
+  align-items:center;column-gap:14px;row-gap:2px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  padding:16px 18px;text-decoration:none;color:var(--text);
+}
+.home-tile:active{opacity:.7}
+/* The Settings tile raises a panel rather than navigating, so it is a <button>.
+   Buttons don't inherit the page font and centre their text; both need undoing
+   so it sits flush with the router-link tiles beside it. */
+button.home-tile{font:inherit;text-align:left;cursor:pointer}
+.home-tile-icon{grid-area:icon;font-size:26px;line-height:1}
+.home-tile-label{grid-area:label;align-self:end;font-size:15px;font-weight:600}
+.home-tile-sub{grid-area:sub;align-self:start;font-size:12px;color:var(--text3)}
+
+/* Blur is a container class, not a per-image style: the grid re-renders on every
+   listing and a per-node style would have to be reapplied each time. */
+.blur-on .card-thumb{filter:blur(20px)}
+.card.is-selected{outline:2px solid var(--accent);outline-offset:-2px}
