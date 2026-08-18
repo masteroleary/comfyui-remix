@@ -263,3 +263,14 @@ select.rmx-inp{cursor:pointer}
 .mb-word{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;font-size:13px;cursor:pointer;border-bottom:1px solid #2c2c2e;color:#c7c7cc}
 .mb-word:hover{background:#0a84ff1a;color:#fff}
 @media (max-width:640px){.rmx-overlay{padding:0}.rmx-dialog{max-width:100%;max-height:100%;height:100%;border-radius:0;border:0}.rmx-picker-overlay{padding:0}.rmx-picker{max-width:100%;max-height:100%;height:100%;border-radius:0}}
+
+/* The preview: what the run will actually send, once the rules have run and any
+   unclaimed [keyword] is gone. Monospace-ish and selectable, because the point
+   is to read it word for word. */
+.rmx-repl-final{margin-top:12px;padding-top:10px;border-top:1px solid #2c2c2e}
+.rmx-repl-final-text{
+  margin-top:5px;padding:9px 10px;border-radius:8px;
+  background:#0a0a0a;border:1px solid #2c2c2e;color:#c7c7cc;
+  font-size:12.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word;
+  max-height:220px;overflow:auto;user-select:text;
+}

@@ -29,6 +29,9 @@ export const routes = [
   // because the library is a property of the install, not of whichever file
   // happened to be open when you wanted to change it.
   { path: '/workflows', name: 'workflows', component: () => import('./views/WorkflowsView.js') },
+  // Reusable prompt text, filed by category. A page rather than a dialog for the
+  // same reason the library is: it belongs to the install, not to a file.
+  { path: '/prompts', name: 'prompts', component: () => import('./views/PromptsView.js') },
   // Settings is routed rather than modal, so each section is linkable and
   // survives a reload. Both paths load the one view: bare = the section menu.
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.js') },

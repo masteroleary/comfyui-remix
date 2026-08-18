@@ -35,6 +35,8 @@ export default {
                  action: () => { store.ui.remix = null; store.ui.jobs = true; } });
       out.push({ key: 'workflows', icon: '🧩', label: 'Workflows', sub: 'The library Remix runs from',
                  to: { name: 'workflows' } });
+      out.push({ key: 'prompts', icon: '📝', label: 'Prompts', sub: 'Reusable text for [keyword] rules',
+                 to: { name: 'prompts' } });
       out.push({ key: 'settings', icon: '⚙', label: 'Settings', sub: 'Paths, ports and privacy',
                  to: { name: 'settings' } });
       // Last tile, and only when a password is actually in use. The shell hides

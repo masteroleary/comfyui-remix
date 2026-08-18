@@ -71,6 +71,12 @@ export const api = {
   saveShortcut: body => post('/api/shortcuts', body),
   deleteShortcut: name => req('/api/shortcuts?id=' + enc(name), { method: 'DELETE' }),
 
+  // The replacement rules and the prompt library, both whole-list.
+  replacements: () => req('/api/replacements'),
+  saveReplacements: list => post('/api/replacements', { replacements: list }),
+  prompts: () => req('/api/prompts'),
+  savePrompts: body => post('/api/prompts', body),
+
   nsfwTerms: () => req('/api/nsfw-terms'),
   saveNsfwTerms: terms => post('/api/nsfw-terms', { terms }),
 

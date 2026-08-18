@@ -1504,6 +1504,13 @@ function detectPresetGroups(wf) {
 let WORKFLOWS_DIR = path.join(COMFY_DIR, 'user', 'default', 'workflows');
 const WF_STORE_PATH = path.join(__dirname, 'app-workflows.json');
 
+// The prompt library: named blocks of prompt text, filed under a category.
+// Categories are seeded rather than fixed — these three are a starting point,
+// and the Prompts page can add to them.
+const PROMPTS_PATH = path.join(__dirname, 'app-prompts.json');
+const DEFAULT_CATEGORIES = ['Character', 'Scene', 'Action'];
+const defaultPrompts = () => ({ categories: DEFAULT_CATEGORIES.slice(), prompts: [] });
+
 function loadWfStore() {
   let store = { enabled: [], mappings: {}, labels: {}, fieldConfigs: {}, shortcuts: {} };
   try { store = Object.assign(store, JSON.parse(fs.readFileSync(WF_STORE_PATH, 'utf8'))); } catch {}
@@ -3123,9 +3130,52 @@ runTests();
       try { body = JSON.parse(bodyStr); } catch { jsonRes(res, { error: 'Bad JSON' }, 400); return; }
       const list = Array.isArray(body.replacements) ? body.replacements
         .filter(r => r && typeof r === 'object')
-        .map(r => ({ from: String(r.from || ''), to: String(r.to || ''), on: !!r.on })) : [];
+        // promptId links a {keyword} rule to a prompt in the library; "to" is the
+        // text it resolved to when it was picked, and the fallback if it is gone.
+        .map(r => ({ from: String(r.from || ''), to: String(r.to || ''), on: !!r.on, promptId: String(r.promptId || '') })) : [];
       try {
         fs.writeFileSync(path.join(__dirname, 'app-replacements.json'), JSON.stringify({ replacements: list }, null, 2));
+        jsonRes(res, { ok: true });
+      } catch (e) { jsonRes(res, { error: e.message }, 500); }
+    });
+    return;
+  }
+
+  // API: The prompt library — named blocks of prompt text, filed under a
+  // category. A replacement rule whose "find" is {keyword} picks its
+  // replacement from here instead of taking free text, which is the whole
+  // reason the library exists.
+  if (pn === '/api/prompts' && req.method === 'GET') {
+    fs.readFile(PROMPTS_PATH, 'utf8', (err, raw) => {
+      if (err) { jsonRes(res, defaultPrompts()); return; }
+      try {
+        const d = JSON.parse(raw);
+        jsonRes(res, {
+          categories: Array.isArray(d.categories) && d.categories.length ? d.categories : DEFAULT_CATEGORIES,
+          prompts: Array.isArray(d.prompts) ? d.prompts : [],
+        });
+      } catch { jsonRes(res, defaultPrompts()); }
+    });
+    return;
+  }
+  if (pn === '/api/prompts' && req.method === 'POST') {
+    let bodyStr = '';
+    req.on('data', c => bodyStr += c);
+    req.on('end', () => {
+      let body;
+      try { body = JSON.parse(bodyStr); } catch { jsonRes(res, { error: 'Bad JSON' }, 400); return; }
+      // Whole-list replace, like /api/replacements: the editor holds the list and
+      // sends all of it, so a lost row is a visible lost row rather than a merge
+      // that silently resurrects something deleted elsewhere.
+      const categories = Array.isArray(body.categories)
+        ? [...new Set(body.categories.map(c => String(c || '').trim()).filter(Boolean))]
+        : DEFAULT_CATEGORIES;
+      const prompts = Array.isArray(body.prompts) ? body.prompts
+        .filter(p => p && typeof p === 'object')
+        .map(p => ({ id: String(p.id || ''), name: String(p.name || '').trim(), category: String(p.category || '').trim(), text: String(p.text || '') }))
+        .filter(p => p.name || p.text) : [];
+      try {
+        fs.writeFileSync(PROMPTS_PATH, JSON.stringify({ categories, prompts }, null, 2));
         jsonRes(res, { ok: true });
       } catch (e) { jsonRes(res, { error: e.message }, 500); }
     });

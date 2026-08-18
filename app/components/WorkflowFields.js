@@ -19,6 +19,7 @@
 // firstLoraFieldId — so a host with a lora library provides them and a host
 // without simply renders the plain rows.
 import { fileUrl } from '../api.js';
+import { autosize } from '../autosize.js';
 import MediaBrowser from './MediaBrowser.js';
 
 const { reactive, ref, computed, watch, inject, provide } = window.Vue;
@@ -79,25 +80,6 @@ export const loraWords = s => {
   return out;
 };
 export const ctype = f => (f.control && f.control.type) || 'text';
-
-function fitTextarea(el) {
-  if (!el) return;
-  // offsetParent is null on a v-show'd tab, where scrollHeight reads 0 and this
-  // would collapse the box to nothing. Leave it; the focus handler refits.
-  if (el.offsetParent === null) return;
-  el.style.height = 'auto';
-  el.style.height = el.scrollHeight + 'px';
-}
-const autosize = {
-  mounted(el) {
-    el.addEventListener('input', () => fitTextarea(el));
-    el.addEventListener('focus', () => fitTextarea(el));
-    fitTextarea(el);
-  },
-  // Covers the value changing from outside the box — loading a workflow's saved
-  // prompt, or a shortcut being applied.
-  updated(el) { fitTextarea(el); },
-};
 
 // ── One control ────────────────────────────────────────────────────────────
 // Renders whatever the field config says this field is: a prompt box, a seed

@@ -21,6 +21,8 @@ import { api, fileUrl, thumbUrl } from '../api.js';
 import MediaToolsMenu from './MediaToolsMenu.js';
 import MediaTile from './MediaTile.js';
 import WorkflowFields, { ctype, shortLora, canonLora, loraWords } from './WorkflowFields.js';
+import ReplacementRules from './ReplacementRules.js';
+import { activeReplacements, applyReplacements, applyReplacementsToNodes, loadReplacements } from '../replacements.js';
 import { viewTo } from '../router.js';
 
 const { reactive, ref, computed, watch, onMounted, onUnmounted, provide, inject } = window.Vue;
@@ -70,53 +72,6 @@ function expandDateTokens(s) {
       .replace(/MM/g, p(d.getMonth() + 1)).replace(/dd/g, p(d.getDate()))
       .replace(/HH/g, p(d.getHours())).replace(/mm/g, p(d.getMinutes())).replace(/ss/g, p(d.getSeconds()));
   });
-}
-
-// ── Prompt Replacements ── global find→replace rules with toggles, applied to
-// prompt/negative field values right before each run (case-insensitive, all
-// matches). Shared with the inspect page via /api/replacements; localStorage
-// gives an instant paint before the server copy arrives.
-const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-// Exported: the inspect page edits these same rows, and launchJob applies them
-// to every prompt it builds. Two copies meant a rule typed on one surface did
-// nothing to a run started from it.
-export const replacements = reactive([]);
-const replAllOn = ref(false);
-function syncReplAll() { replAllOn.value = replacements.length > 0 && replacements.every(r => r.on); }
-function activeReplacements() { return replacements.filter(r => r.on && r.from && String(r.from).trim()); }
-export function saveReplacements() {
-  const plain = replacements.map(r => ({ from: r.from, to: r.to, on: !!r.on }));
-  try { localStorage.setItem('archiveReplacements', JSON.stringify(plain)); } catch (e) {}
-  jpost('/api/replacements', { replacements: plain }).catch(() => {});
-  syncReplAll();
-}
-try { const c = JSON.parse(localStorage.getItem('archiveReplacements') || '[]'); if (Array.isArray(c)) replacements.push(...c); } catch (e) {}
-syncReplAll();
-jget('/api/replacements').then(d => {
-  const server = Array.isArray(d.replacements) ? d.replacements : [];
-  if (server.length === 0 && replacements.length > 0) { saveReplacements(); }
-  else { replacements.splice(0, replacements.length, ...server); try { localStorage.setItem('archiveReplacements', JSON.stringify(server)); } catch (e) {} }
-  syncReplAll();
-}).catch(() => {});
-function applyReplacements(text) {
-  if (typeof text !== 'string') return text;
-  let out = text;
-  for (const r of activeReplacements()) out = out.replace(new RegExp(escRe(r.from), 'gi'), r.to == null ? '' : r.to);
-  return out;
-}
-// For nodes: only touch prompt-ish string inputs, skipping model/sampler/file/numeric keys.
-const REPL_SKIP_KEY = /_name$|name$|filename|ckpt|lora|vae|sampler|scheduler|model|path|url|format|extension|seed|width|height|steps|cfg/i;
-function applyReplacementsToNodes(prompt) {
-  if (!activeReplacements().length) return prompt;
-  for (const node of Object.values(prompt)) {
-    if (!node || !node.inputs) continue;
-    for (const key of Object.keys(node.inputs)) {
-      if (typeof node.inputs[key] !== 'string') continue;
-      if (REPL_SKIP_KEY.test(key)) continue;
-      node.inputs[key] = applyReplacements(node.inputs[key]);
-    }
-  }
-  return prompt;
 }
 
 // The longest plausible positive prompt in a flat API prompt object. A heuristic,
@@ -191,6 +146,10 @@ const JobDB = {
   async del(id) { const db = await this.open(); return new Promise((res, rej) => { const tx = db.transaction('jobs', 'readwrite'); tx.objectStore('jobs').delete(id); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); },
 };
 const jobChannel = (() => { try { return new BroadcastChannel('comfy-jobs'); } catch (e) { return null; } })();
+
+// The rules are applied at launch, so they have to be in memory before the
+// first run — not merely by the time an editor is opened.
+loadReplacements();
 
 // ── Central reactive store: the single source of truth for jobs ──
 export const jobs = reactive({ list: [], loaded: false });
@@ -597,7 +556,7 @@ function prefillFromEmbedded(fields, wfGraph) {
 // ── The dialog ─────────────────────────────────────────────────────────────
 export default {
   name: 'RemixDialog',
-  components: { WorkflowFields, MediaTile },
+  components: { WorkflowFields, MediaTile, ReplacementRules },
   props: {
     // The media being remixed, in the listing's own shape: { path, name,
     // isVideo/isImage/isAudio, v }. `path` is absolute and on Windows arrives
@@ -1073,11 +1032,7 @@ export default {
       nodeEdits[id][k] = v;
     }
     // Prompt Replacements UI (state + helpers are module-level singletons).
-    const replActiveCount = computed(() => replacements.filter(r => r.on && r.from && String(r.from).trim()).length);
-    const addRepl = () => replacements.push({ from: '', to: '', on: true });
-    const delRepl = i => { replacements.splice(i, 1); saveReplacements(); };
-    const swapRepl = r => { const a = r.from; r.from = r.to; r.to = a; saveReplacements(); };
-    const toggleReplAll = () => { const on = !replAllOn.value; replacements.forEach(r => r.on = on); saveReplacements(); };
+
     const nodeEntries = computed(() => meta.embedded ? Object.entries(meta.embedded) : []);
     const filteredNodes = computed(() => {
       const q = nodeFilter.value.trim().toLowerCase();
@@ -1149,9 +1104,14 @@ export default {
       wfLib.busy = false;
     }
 
-    return { store, src, tab, runCount, batchCount, workflows, wf, wfGroups, cfg, selectedPreset, scSaving, scSaved, canShortcut, shortcutHint, saveShortcut, deleteShortcut, isShortcut, currentWfLabel, currentWfShort,
+    // The prompt the rules will rewrite, for the editor to preview.
+    const promptFieldText = computed(() => {
+      const f = (cfg.fields || []).find(x => x.kind === 'prompt' && x.enabled && !x.variant);
+      return f && f.value != null ? String(f.value) : '';
+    });
+    return { promptFieldText, store, src, tab, runCount, batchCount, workflows, wf, wfGroups, cfg, selectedPreset, scSaving, scSaved, canShortcut, shortcutHint, saveShortcut, deleteShortcut, isShortcut, currentWfLabel, currentWfShort,
       canUpdateWf, wfUpdating, wfUpdated, updateWorkflow, meta, job, isVideo, mediaUrl, toolsMenu, toolItem, remix, cancelJob, close, saveMsg, nodeFilter, saveLog, filteredNodes, nodeInputs,
-      replacements, replAllOn, replActiveCount, addRepl, delRepl, swapRepl, toggleReplAll, saveReplacements, nodeEdits, editVal, setEdit,
+      nodeEdits, editVal, setEdit,
       resultTiles, openResultFile, remixResult, pendingSlots, prog, wfSave, wfNameTaken, openWfSave, saveEmbeddedWf,
       wfLib, wfLibShown, wfLibCount, wfLibDupes, openWfLib, saveWfLib, addUnlistedWf, fileUrl };
   },
@@ -1232,21 +1192,7 @@ export default {
             <div v-else-if="cfg.error" class="rmx-mut">Couldn’t load fields: {{ cfg.error }}</div>
             <div v-else>
               <workflow-fields :cfg="cfg" :preset="selectedPreset" @update:preset="selectedPreset = $event">
-              <details class="rmx-repl">
-                <summary>Prompt Replacements<span class="rmx-mut" v-if="replActiveCount"> — {{ replActiveCount }} active</span><span class="rmx-mut" v-else-if="replacements.length"> — {{ replacements.length }} off</span></summary>
-                <div class="rmx-repl-body">
-                  <div class="rmx-mut" style="font-size:12px;margin-bottom:8px">Applied to the prompt right before each run (case-insensitive, all matches). Shared with the inspect page.</div>
-                  <label class="rmx-repl-all"><input type="checkbox" :checked="replAllOn" @change="toggleReplAll"> Toggle all on/off</label>
-                  <div v-for="(r,i) in replacements" :key="i" class="rmx-repl-row">
-                    <input type="checkbox" v-model="r.on" @change="saveReplacements" title="Enable this rule">
-                    <input type="text" class="rmx-inp" placeholder="find" v-model="r.from" @change="saveReplacements">
-                    <button type="button" class="rmx-btn2 rmx-repl-swap" title="Swap words" @click="swapRepl(r)">⇄</button>
-                    <input type="text" class="rmx-inp" placeholder="replace with" v-model="r.to" @change="saveReplacements">
-                    <button type="button" class="rmx-repl-del" title="Delete rule" @click="delRepl(i)">✕</button>
-                  </div>
-                  <button type="button" class="rmx-btn2" style="margin-top:6px" @click="addRepl">＋ Add replacement</button>
-                </div>
-              </details>
+                <replacement-rules :prompt="promptFieldText"></replacement-rules>
               </workflow-fields>
             </div>
             <details class="rmx-hidden" v-if="meta.embedded" style="margin-top:12px">

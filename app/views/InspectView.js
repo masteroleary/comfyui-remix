@@ -28,7 +28,8 @@ import { viewTo } from '../router.js';
 import MediaTile from '../components/MediaTile.js';
 // The run engine. It lives in RemixDialog for historical reasons (see the note
 // at the top of that file); what matters here is that there is exactly one.
-import { launchJob, cancelJob, jobs, link, replacements, saveReplacements } from '../components/RemixDialog.js';
+import { launchJob, cancelJob, jobs, link } from '../components/RemixDialog.js';
+import ReplacementRules from '../components/ReplacementRules.js';
 import WorkflowFields from '../components/WorkflowFields.js';
 
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = window.Vue;
@@ -118,7 +119,7 @@ const postJson = (url, body) => fetch(url, {
 
 export default {
   name: 'InspectView',
-  components: { MediaTile, WorkflowFields },
+  components: { MediaTile, WorkflowFields, ReplacementRules },
   setup() {
     const route = useRoute();
     const router = useRouter();
@@ -573,6 +574,11 @@ export default {
         })
         .catch(e => { fieldsMsg.value = 'Save failed: ' + e.message; });
     }
+    // The prompt the rules will rewrite, for the editor to preview.
+    const promptFieldText = computed(() => {
+      const f = ((fieldConfig.value && fieldConfig.value.fields) || []).find(x => x.kind === 'prompt' && x.enabled && !x.variant);
+      return f && f.value != null ? String(f.value) : '';
+    });
     function fieldsSeedPinnedNow() {
       if (!fieldConfig.value) return false;
       const sf = fieldConfig.value.fields.find(f => f.kind === 'seed' && f.enabled);
@@ -599,38 +605,6 @@ export default {
       return fv;
     }
 
-    // ── Prompt replacements ───────────────────────────────────────────────
-    // The rows are the engine's; this is only the editor for them. Drafts live
-    // on the row as __from/__to so an edited word turns ✕ into ✓ instead of
-    // saving on every keystroke — the save maps to {from,to,on}, so the extra
-    // keys never reach the server.
-    const ensureDrafts = () => replacements.forEach(r => {
-      if (r.__from === undefined) r.__from = r.from || '';
-      if (r.__to === undefined) r.__to = r.to || '';
-    });
-    const activeReplacements = () => replacements.filter(r => r.on && r.from && String(r.from).trim());
-    const replaceSummary = computed(() => {
-      const n = activeReplacements().length, total = replacements.length;
-      return n ? ' — ' + n + ' active' : (total ? ' — ' + total + ' off' : '');
-    });
-    const allReplChecked = computed(() => replacements.length > 0 && replacements.every(r => r.on));
-    const allReplIndeterminate = computed(() => {
-      const on = replacements.filter(r => r.on).length;
-      return on > 0 && on < replacements.length;
-    });
-    const isReplDirty = r => r.__from !== r.from || r.__to !== r.to;
-    function commitRepl(r) { r.from = r.__from; r.to = r.__to; saveReplacements(); }
-    function swapRepl(r) { const a = r.__from; r.__from = r.__to; r.__to = a; commitRepl(r); }
-    function replAct(r, i) {
-      if (isReplDirty(r)) { commitRepl(r); return; }
-      replacements.splice(i, 1);
-      saveReplacements();
-    }
-    function toggleAllRepl(on) { replacements.forEach(r => { r.on = on; }); saveReplacements(); }
-    function addReplacement() {
-      replacements.push({ from: '', to: '', on: true, __from: '', __to: '' });
-      saveReplacements();
-    }
     async function comfyUp(timeoutMs) {
       try {
         const r = await fetch('/api/comfy/system_stats', { credentials: 'same-origin', signal: AbortSignal.timeout(timeoutMs || 4000) });
@@ -892,7 +866,6 @@ export default {
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
     onMounted(() => {
-      ensureDrafts();
 
       applyBoot();
       if (fileLess.value) openWorkflowOnly(); else loadMetadata();
@@ -935,12 +908,10 @@ export default {
 
       selectedPreset,
       // detected fields
-      fieldConfig, saveFieldEdits, fieldsMsg,
+      fieldConfig, promptFieldText, saveFieldEdits, fieldsMsg,
       canUpdateWf, wfUpdating, wfUpdated, updateWorkflow,
       loadFieldConfig,
-      // replacements
-      replacements, replaceSummary, allReplChecked, allReplIndeterminate,
-      saveReplacements, isReplDirty, commitRepl, swapRepl, replAct, toggleAllRepl, addReplacement,
+
       // execution
       jobLog, progressPct, progressCls, execLogEl,
       saveLog, saveLogLabel,
@@ -1001,40 +972,7 @@ export default {
            the slot — those are per-surface state, not part of the form. -->
       <workflow-fields v-if="fieldConfig" :cfg="fieldConfig"
                        :preset="selectedPreset" @update:preset="selectedPreset = $event">
-      <details class="replace-box">
-        <summary>
-          <span class="cap">Prompt Replacements</span><span>{{ replaceSummary }}</span>
-        </summary>
-        <div class="replace-body">
-          <div class="replace-help">
-            Enabled rules are applied to the prompt right before each run (case-insensitive, all matches).
-            Edited words turn the ✕ into ✓ — tap to save.
-          </div>
-          <label class="replace-all">
-            <input type="checkbox" :checked="allReplChecked" :indeterminate.prop="allReplIndeterminate"
-                   @change="toggleAllRepl($event.target.checked)"> Toggle all on/off
-          </label>
-          <div>
-            <div v-for="(r, i) in replacements" :key="i" class="replace-row">
-              <input type="checkbox" v-model="r.on" @change="saveReplacements">
-              <span class="replace-cell">
-                <input type="text" placeholder="find" v-model="r.__from" @keydown.enter="commitRepl(r)">
-                <button class="replace-clear" tabindex="-1" title="Clear" @click="r.__from = ''">✕</button>
-              </span>
-              <button class="btn btn-swap" title="Swap words" @click="swapRepl(r)">⇄</button>
-              <span class="replace-cell">
-                <input type="text" placeholder="replace with" v-model="r.__to" @keydown.enter="commitRepl(r)">
-                <button class="replace-clear" tabindex="-1" title="Clear" @click="r.__to = ''">✕</button>
-              </span>
-              <button class="btn btn-repl-act" :class="{ dirty: isReplDirty(r) }"
-                      :title="isReplDirty(r) ? 'Save' : 'Delete'" @click="replAct(r, i)">
-                {{ isReplDirty(r) ? '✓' : '✕' }}
-              </button>
-            </div>
-          </div>
-          <button class="btn btn-sm" style="margin-top:6px" @click="addReplacement">+ Add replacement</button>
-        </div>
-      </details>
+        <replacement-rules :prompt="promptFieldText"></replacement-rules>
       </workflow-fields>
       <div v-else-if="showRun" class="fc-empty">
         Nothing detected in this workflow, so there is nothing to set. ↻ Refresh detection re-reads the file.

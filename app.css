@@ -185,6 +185,55 @@ html.auth-on .shell-settings{right:56px}
 .wf-row-sub{font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wf-row-go{flex:none;font-size:18px;color:var(--text3)}
 
+/* ── Prompts ──────────────────────────────────────────────────────────────── */
+/* Shares the Workflows page frame (.wf-page/.wf-head); only the rows differ. */
+.pr-cats{margin-bottom:14px}
+.pr-cat-toggle{
+  font:inherit;font-size:12px;cursor:pointer;color:var(--text2);
+  background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:5px 12px;
+}
+.pr-cat-edit{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px}
+.pr-cat-chip{
+  display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text);
+  background:var(--surface2);border-radius:999px;padding:4px 6px 4px 12px;
+}
+.pr-cat-x{background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 4px}
+.pr-cat-x:hover{color:var(--red)}
+.pr-cat-new{display:flex;align-items:center;gap:6px}
+.pr-cat-new .wf-map-sel{width:150px}
+.pr-group{margin-bottom:18px}
+.pr-group-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.pr-group-name{font-size:13px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.4px}
+.btn-sm-add{
+  font:inherit;font-size:12px;cursor:pointer;color:var(--text2);
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:2px 8px;
+}
+.btn-sm-add:hover{border-color:var(--accent);color:var(--text)}
+.pr-row{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  padding:10px 12px;margin-bottom:8px;
+}
+.pr-row-top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.pr-name{
+  flex:1;min-width:0;font:inherit;font-size:14px;font-weight:600;
+  background:var(--bg);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--r-sm);padding:7px 9px;
+}
+.pr-cat{
+  flex:none;width:140px;font:inherit;font-size:12px;cursor:pointer;
+  background:var(--bg);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--r-sm);padding:7px 8px;
+}
+.pr-del{flex:none;background:none;border:none;color:var(--text3);font-size:15px;cursor:pointer}
+.pr-del:hover{color:var(--red)}
+/* The whole point of the page: prompt text is paragraphs, so the box grows. */
+.pr-text{
+  display:block;width:100%;resize:vertical;overflow:hidden;
+  font:inherit;font-size:13px;line-height:1.5;
+  background:var(--bg);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--r-sm);padding:8px 9px;
+}
+
 /* ── Home tiles ───────────────────────────────────────────────────────────── */
 .home{padding:16px}
 /* The art is light-on-black and its ground is within a shade of the page's own,
