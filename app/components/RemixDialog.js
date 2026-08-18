@@ -19,8 +19,12 @@
 import { store, showToast } from '../store.js';
 import { api, fileUrl, thumbUrl } from '../api.js';
 import MediaToolsMenu from './MediaToolsMenu.js';
+import MediaTile from './MediaTile.js';
+import WorkflowFields, { ctype, shortLora, canonLora, loraWords } from './WorkflowFields.js';
+import { viewTo } from '../router.js';
 
 const { reactive, ref, computed, watch, onMounted, onUnmounted, provide, inject } = window.Vue;
+const { useRouter } = window.VueRouter;
 
 const enc = encodeURIComponent;
 // Plain fetch for the endpoints app/api.js does not cover yet. Deliberately NOT
@@ -34,38 +38,6 @@ const jpost = (url, body) => fetch(url, {
   body: JSON.stringify(body || {}),
 }).then(r => r.json());
 
-const WIDE = new Set(['prompt', 'negative_prompt', 'lora_list', 'image_input', 'video_input', 'audio_input']);
-const loraLast = (a, b) => (/^lora/.test(a.kind) ? 1 : 0) - (/^lora/.test(b.kind) ? 1 : 0);
-const shortLora = s => String(s == null ? '' : s).split(/[\\/]/).pop().replace(/\.safetensors$/i, '');
-// A High/Low pair is one lora as far as suggestions go, so they collapse to a
-// single key: offering both halves of a pair the user then has to tick twice
-// is worse than offering the pair once and letting addLoraRow place both.
-// Punctuation is stripped too: the same lora shows up as "wan22-name-…" in a
-// saved graph and "WAN_22-name-…" in the library, and those must collapse or
-// the one already wired in gets offered again as a suggestion.
-// Must collapse every spelling of the noise level that swapHiLo knows about
-// (see NOISE_PAIRS), or a pair like "…-HN"/"…-LN" keys apart and both halves
-// get offered — which then render as the same file once the side is resolved.
-const canonLora = s => shortLora(s).toLowerCase()
-  .replace(/high|low/g, '#')
-  .replace(/(^|[^a-z])(hn|ln)(?![a-z])/g, '$1#')
-  .replace(/[^a-z0-9#]+/g, '');
-// Prompt ↔ lora word matching. Whole words only: lora filenames are dense
-// enough that substring hits are almost all noise ("art" inside "artifact").
-// Which words count as meaningful is NOT decided here — the server derives
-// that vocabulary from the lora library itself and ships it as index.terms
-// (see buildLoraIndex in server.js). This only tokenises, and must fold
-// exactly the way the server's loraTokens does or the two won't meet.
-const loraWords = s => {
-  const out = new Set();
-  for (let w of String(s == null ? '' : s).toLowerCase().split(/[^a-z0-9]+/)) {
-    if (w.length < 4 || /^\d+$/.test(w)) continue;
-    if (w.length > 4 && w.endsWith('s')) w = w.slice(0, -1);   // crude plural fold, applied to both sides
-    out.add(w);
-  }
-  return out;
-};
-const ctype = f => (f.control && f.control.type) || 'text';
 export const isVideoName = p => /\.(mp4|webm|mkv|mov|m4v)$/i.test(p || '');
 // Thumbnail for a job's source or output. A video has no still of its own, so it
 // needs either the companion PNG the save node wrote (thumbPath, when /api/recent-
@@ -105,11 +77,14 @@ function expandDateTokens(s) {
 // matches). Shared with the inspect page via /api/replacements; localStorage
 // gives an instant paint before the server copy arrives.
 const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const replacements = reactive([]);
+// Exported: the inspect page edits these same rows, and launchJob applies them
+// to every prompt it builds. Two copies meant a rule typed on one surface did
+// nothing to a run started from it.
+export const replacements = reactive([]);
 const replAllOn = ref(false);
 function syncReplAll() { replAllOn.value = replacements.length > 0 && replacements.every(r => r.on); }
 function activeReplacements() { return replacements.filter(r => r.on && r.from && String(r.from).trim()); }
-function saveReplacements() {
+export function saveReplacements() {
   const plain = replacements.map(r => ({ from: r.from, to: r.to, on: !!r.on }));
   try { localStorage.setItem('archiveReplacements', JSON.stringify(plain)); } catch (e) {}
   jpost('/api/replacements', { replacements: plain }).catch(() => {});
@@ -588,248 +563,8 @@ export async function deleteJob(job) { const i = jobs.list.indexOf(job); if (i >
 // Grow a textarea to its content instead of scrolling inside a fixed 7 rows.
 // Height must go to 'auto' first or scrollHeight only ever reports the height it
 // already has, and the box can then grow but never shrink.
-function fitTextarea(el) {
-  if (!el) return;
-  // offsetParent is null on a v-show'd tab, where scrollHeight reads 0 and this
-  // would collapse the box to nothing. Leave it; the focus handler refits.
-  if (el.offsetParent === null) return;
-  el.style.height = 'auto';
-  el.style.height = el.scrollHeight + 'px';
-}
-const autosize = {
-  mounted(el) {
-    el.addEventListener('input', () => fitTextarea(el));
-    el.addEventListener('focus', () => fitTextarea(el));
-    fitTextarea(el);
-  },
-  // Covers the value changing from outside the box — loading a workflow's saved
-  // prompt, or a shortcut being applied.
-  updated(el) { fitTextarea(el); },
-};
 
-// ── One control ────────────────────────────────────────────────────────────
-// Renders whatever the field config says this field is: a prompt box, a seed
-// with its pin, a lora stack, a combo, a number, a media path with a picker.
-const FieldControl = {
-  name: 'FieldControl',
-  directives: { autosize },
-  props: ['field'],
-  setup(props) {
-    const loraExpanded = ref(false);
-    const promptWords = inject('promptWords', null);
-    const loraTerms = inject('loraTerms', null);
-    // Disabled loras split in two: those whose filename shares a meaningful
-    // word with the prompt ride along under the enabled ones, the rest stay
-    // behind "＋ N more". "Meaningful" is the server's library-derived
-    // vocabulary — with no index (ComfyUI never reached) nothing is suggested,
-    // which is quieter than matching on words like "high" that every lora has.
-    const loraRows = computed(() => {
-      const words = (promptWords && promptWords.value) || null;
-      const terms = (loraTerms && loraTerms.value) || null;
-      const on = [], hit = [], rest = [];
-      (Array.isArray(props.field.value) ? props.field.value : []).forEach((r, i) => {
-        if (!r) return;
-        if (r.on) { on.push({ r, i, match: '', df: 0 }); return; }
-        let match = '', df = Infinity;
-        if (words && words.size && terms) {
-          for (const w of loraWords(shortLora(r.lora))) {
-            const c = terms[w];
-            if (c === undefined || !words.has(w)) continue;   // absent = boilerplate the index dropped
-            if (c < df) { df = c; match = w; }                // rarest word across the library wins the chip
-          }
-        }
-        (match ? hit : rest).push({ r, i, match, df });
-      });
-      hit.sort((a, b) => a.df - b.df || a.i - b.i);           // most specific suggestion first
-      return { on, hit, rest };
-    });
-    const visibleLoras = computed(() => {
-      const g = loraRows.value;
-      return loraExpanded.value ? g.on.concat(g.hit, g.rest) : g.on.concat(g.hit);
-    });
-    const hiddenCount = computed(() => loraRows.value.rest.length);
-    const suggestLibrary = inject('suggestLibrary', null);
-    const firstLoraFieldId = inject('firstLoraFieldId', null);
-    const libExpanded = ref(false);
-    const libAll = computed(() => {
-      if (!suggestLibrary || !firstLoraFieldId) return { list: [], cap: 0 };
-      if (props.field.id !== firstLoraFieldId.value) return { list: [], cap: 0 };
-      return suggestLibrary(props.field);
-    });
-    const library = computed(() => {
-      const g = libAll.value;
-      return { list: libExpanded.value ? g.list : g.list.slice(0, g.cap), more: Math.max(0, g.list.length - g.cap) };
-    });
-    const openPicker = inject('openPicker', null);
-    const addLoraRow = inject('addLoraRow', null);
-    // Drop one file from a multi-file pick, keeping `value` on the first survivor and
-    // collapsing back to a plain single pick when only one is left.
-    function dropPicked(field, i) {
-      if (!Array.isArray(field.values)) return;
-      field.values.splice(i, 1);
-      if (field.values.length) field.value = field.values[0];
-      if (field.values.length <= 1) field.values = null;
-    }
-    // Ticking a library suggestion appends the row (enabled) and mirrors the
-    // high/low pair — the only way loras get added now that the search-and-add
-    // box is gone, since it just dumped every lora the server had cached.
-    function addFromLibrary(lora) { if (addLoraRow) addLoraRow(props.field, lora); }
-    return { t: computed(() => ctype(props.field)), shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
-  },
-  template: `
-    <textarea v-if="t==='multiline'" v-autosize class="rmx-inp rmx-ta" style="width:100%" rows="2" v-model="field.value"></textarea>
-    <span v-else-if="field.kind==='seed'" class="rmx-seedwrap">
-      <input type="number" class="rmx-inp" style="width:160px" v-model="field.value" placeholder="random" min="0">
-      <button type="button" class="rmx-seed" :class="{on: field._pin}" @click="field._pin = !field._pin"
-              :title="field._pin ? 'Pinned — exact seed each run' : 'Random each run'"><span class="thumb">{{ field._pin ? '📌' : '🎲' }}</span></button>
-      <button v-if="field._mediaSeed != null && String(field.value).trim()===''" type="button" class="rmx-btn2"
-              @click="field.value = field._mediaSeed; field._pin = true"
-              :title="'Pin the seed this file was generated with (' + field._mediaSeed + ')'">↺ this file's seed</button>
-    </span>
-    <input v-else-if="t==='boolean'" type="checkbox" v-model="field.value" style="width:16px;height:16px;accent-color:#0a84ff">
-    <input v-else-if="t==='int' || t==='float'" type="number" class="rmx-inp" style="width:120px" :step="t==='float' ? '0.01' : '1'" v-model="field.value">
-    <select v-else-if="t==='combo'" class="rmx-inp" v-model="field.value"><option v-for="o in (field.control&&field.control.options||[field.value])" :key="o" :value="o">{{ o }}</option></select>
-    <div v-else-if="t==='lora_rows'" class="rmx-loras">
-      <div v-for="e in visibleLoras" :key="e.i" class="rmx-lora" :class="{off: !e.r.on, sug: !!e.match}">
-        <input type="checkbox" v-model="e.r.on"><label :title="e.r.lora">{{ shortLora(e.r.lora) }}</label>
-        <span v-if="e.match" class="rmx-lora-hit" :title="'&quot;' + e.match + '&quot; is in the prompt — tick to use this lora'">{{ e.match }}</span>
-        <input type="number" step="0.05" v-model.number="e.r.strength">
-      </div>
-      <div v-for="s in library.list" :key="'lib:'+s.lora" class="rmx-lora sug">
-        <input type="checkbox" :checked="false" :title="'Add ' + shortLora(s.lora) + ' to this workflow'" @change="addFromLibrary(s.lora)">
-        <label :title="s.lora">{{ shortLora(s.lora) }}</label>
-        <span class="rmx-lora-hit" :title="'&quot;' + s.match + '&quot; is in the prompt'">{{ s.match }}</span>
-        <span class="rmx-lora-lib" title="In your lora library but not in this workflow — tick to add it">library</span>
-      </div>
-      <div v-if="library.more || libExpanded" class="rmx-lora-more" @click="libExpanded=!libExpanded"><span>{{ libExpanded ? 'Hide extra library matches' : ('＋ ' + library.more + ' more in your library match the prompt') }}</span><span class="rmx-lora-arrow" :class="{open: libExpanded}">▾</span></div>
-      <div v-if="!field.value.length && !library.list.length" class="rmx-mut" style="font-size:12px">no lora slots</div>
-      <div v-else-if="hiddenCount || loraExpanded" class="rmx-lora-more" @click="loraExpanded=!loraExpanded"><span>{{ loraExpanded ? 'Hide disabled loras' : ('＋ ' + hiddenCount + ' more lora' + (hiddenCount===1?'':'s')) }}</span><span class="rmx-lora-arrow" :class="{open: loraExpanded}">▾</span></div>
-    </div>
-    <span v-else-if="t==='image' || t==='video' || t==='audio'" class="rmx-imgf">
-      <input type="text" class="rmx-inp" style="width:200px" v-model="field.value">
-      <button v-if="openPicker && t==='image'" type="button" class="rmx-btn2" @click="openPicker(field)">🖼 Browse</button>
-      <img v-if="t==='image' && field.value && !(field.values && field.values.length)" :key="field.value" :src="fileUrl(field.value)" @error="$event.target.style.display='none'" title="Selected image">
-      <span v-if="t==='image' && field.values && field.values.length" class="rmx-mut" style="font-size:11.5px">{{ field.values.length }} files · one job each</span>
-      <div v-if="t==='image' && field.values && field.values.length" class="rmx-picked">
-        <div v-for="(p,i) in field.values" :key="p" class="rmx-picked-cell" :title="p">
-          <img :src="fileUrl(p)" loading="lazy" @error="$event.target.style.visibility='hidden'">
-          <button type="button" class="rmx-picked-x" @click="dropPicked(field, i)" title="Remove">✕</button>
-        </div>
-      </div>
-    </span>
-    <input v-else type="text" class="rmx-inp" style="width:280px;max-width:100%" v-model="field.value">
-  `,
-};
 
-// ── Media browser ──────────────────────────────────────────────────────────
-// Reusable picker (search names+prompts, prompt-word directory, sort, folder
-// navigation, uniform-height thumbnails). Emits 'pick' with a path or an array.
-const MB_SORTS = [{ s: 'date', a: false, l: 'Newest' }, { s: 'date', a: true, l: 'Oldest' }, { s: 'name', a: true, l: 'A–Z' }, { s: 'name', a: false, l: 'Z–A' }, { s: 'size', a: false, l: 'Largest' }];
-const MediaBrowser = {
-  name: 'MediaBrowser',
-  props: { type: { type: String, default: 'image' }, multi: { type: Boolean, default: false } },
-  emits: ['pick'],
-  setup(props, { emit }) {
-    // Multi-select: ticks accumulate across folder changes and searches (the pool is
-    // outside `state`, which load() replaces), and Apply hands back the whole list in
-    // pick order — that order becomes the order the jobs are queued in.
-    const sel = reactive([]);
-    const isSel = p => sel.includes(p);
-    const toggleSel = (p) => { const i = sel.indexOf(p); if (i < 0) sel.push(p); else sel.splice(i, 1); };
-    const clearSel = () => sel.splice(0, sel.length);
-    const applySel = () => { if (sel.length) emit('pick', sel.slice()); };
-    const state = reactive({ items: [], parent: null, dir: '', loading: false });
-    const roots = reactive({ output: '', favorites: '' });
-    const activeRoot = ref('output');
-    const search = ref('');
-    const sortIdx = ref(0);
-    const words = reactive({ open: false, list: [], filter: '', loading: false });
-    let timer = null;
-    async function load(dir) {
-      state.loading = true;
-      try {
-        // `asc` is the string 'true'/'false' on purpose — the server tests for the
-        // literal 'false', so any other spelling reads as ascending.
-        const so = MB_SORTS[sortIdx.value];
-        const p = { limit: '200', sort: so.s, asc: so.a ? 'true' : 'false' };
-        if (search.value.trim()) { p.search = search.value.trim(); p.scope = 'all'; }
-        else if (dir != null) p.dir = dir;
-        const r = await api.list(p);
-        const t = props.type;
-        state.items = (r.items || []).filter(it => it.isDir || (t === 'image' ? it.isImage : t === 'video' ? it.isVideo : it.isAudio));
-        roots.output = r.comfyOutputDir || roots.output; roots.favorites = r.favoritesDir || roots.favorites;
-        state.parent = r.parent; state.dir = r.dir || '';
-      } catch (e) {}
-      state.loading = false;
-    }
-    function switchRoot(which) { activeRoot.value = which; search.value = ''; load(which === 'output' ? roots.output : roots.favorites); }
-    onMounted(async () => {
-      // The two roots are app-wide, so take the shared copy when it is already
-      // known and only pay for the discovery request when it isn't.
-      if (!store.roots.out && !store.roots.fav) { try { store.roots = await api.roots(); } catch (e) {} }
-      roots.output = store.roots.out || ''; roots.favorites = store.roots.fav || '';
-      activeRoot.value = roots.output ? 'output' : 'favorites';
-      load(activeRoot.value === 'output' ? roots.output : (roots.favorites || ''));
-    });
-    function onSearch() { clearTimeout(timer); timer = setTimeout(() => load(search.value.trim() ? null : state.dir), 350); }
-    function clickItem(it) {
-      if (it.isDir) { search.value = ''; load(it.path); return; }
-      if (props.multi) toggleSel(it.path); else emit('pick', it.path);
-    }
-    const thumb = it => it.isVideo ? (it.thumb ? thumbUrl(it.path, it.thumbV) : '') : fileUrl(it.path, it.v);
-    const dirName = computed(() => (state.dir || '').split(/[\\/]/).filter(Boolean).pop() || 'Media');
-    const sortLabel = computed(() => MB_SORTS[sortIdx.value].l);
-    function cycleSort() { sortIdx.value = (sortIdx.value + 1) % MB_SORTS.length; load(search.value.trim() ? null : state.dir); }
-    // No safe flag: the picker lists every phrase, safe mode or not — the same
-    // thing the pre-SPA page asked for as ?safe=0.
-    async function openWords() { words.open = true; if (words.list.length) return; words.loading = true; try { const d = await api.promptWords(); words.list = d.words || []; } catch (e) {} words.loading = false; }
-    const filteredWords = computed(() => { const f = words.filter.trim().toLowerCase(); const l = f ? words.list.filter(w => w.t.includes(f)) : words.list; return l.slice().sort((a, b) => b.n - a.n || a.t.localeCompare(b.t)).slice(0, 400); });
-    function pickWord(w) { words.open = false; search.value = w.t; load(null); }
-    return { state, roots, activeRoot, switchRoot, search, words, load, onSearch, clickItem, thumb, dirName, sortLabel, cycleSort, openWords, filteredWords, pickWord, sel, isSel, clearSel, applySel };
-  },
-  template: `
-    <div class="mb">
-      <div class="mb-toolbar">
-        <div class="mb-roots">
-          <button :class="{on: activeRoot==='output'}" @click="switchRoot('output')" :disabled="!roots.output">Output</button>
-          <button :class="{on: activeRoot==='favorites'}" @click="switchRoot('favorites')" :disabled="!roots.favorites">Favorites</button>
-        </div>
-        <input class="rmx-inp mb-search" type="search" placeholder="Search names & prompts…" v-model="search" @input="onSearch">
-        <button class="rmx-btn2" @click="openWords" title="Browse prompt words"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M20.6 13.4l-7.1 7.1a2 2 0 0 1-2.8 0l-6.2-6.2A2 2 0 0 1 3.9 12.8l.5-7a1.5 1.5 0 0 1 1.4-1.4l7-.5a2 2 0 0 1 1.5.6l6.3 6.3a2 2 0 0 1 0 2.6z"/><circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/></svg></button>
-        <button class="rmx-btn2" @click="cycleSort" :title="'Sort: ' + sortLabel">{{ sortLabel }}</button>
-        <button v-if="state.parent && !search" class="rmx-btn2" @click="load(state.parent)">↑ Up</button>
-        <span class="rmx-mut" style="margin-left:auto;font-size:12px">{{ search ? 'search results' : dirName }}</span>
-      </div>
-      <div v-if="state.loading" class="rmx-mut" style="padding:16px">Loading…</div>
-      <div v-else-if="!state.items.length" class="rmx-mut" style="padding:16px">Nothing here.</div>
-      <div v-else class="mb-grid">
-        <div v-for="it in state.items" :key="it.path" class="mb-cell" :class="{folder: it.isDir, sel: multi && isSel(it.path)}" @click="clickItem(it)" :title="it.name">
-          <span v-if="it.isDir" class="mb-folder-ico">📁</span>
-          <img v-else-if="thumb(it)" :src="thumb(it)" loading="lazy" @error="$event.target.style.visibility='hidden'">
-          <span v-else class="mb-folder-ico">🎞️</span>
-          <input v-if="multi && !it.isDir" type="checkbox" class="mb-tick" :checked="isSel(it.path)" @click.stop="clickItem(it)">
-          <span class="mb-cap">{{ it.name }}</span>
-        </div>
-      </div>
-      <div v-if="multi" class="mb-selbar">
-        <span :class="sel.length ? '' : 'rmx-mut'">{{ sel.length }} selected</span>
-        <button v-if="sel.length" class="rmx-btn2" @click="clearSel">Clear</button>
-        <span class="rmx-mut" style="margin-left:auto;font-size:11.5px">Each file becomes its own job</span>
-        <button class="rmx-btn2" :disabled="!sel.length" @click="applySel">Apply<span v-if="sel.length"> ({{ sel.length }})</span></button>
-      </div>
-      <div v-if="words.open" class="mb-words" data-backdrop @click.self="words.open=false">
-        <div class="mb-words-panel">
-          <input class="rmx-inp" type="search" placeholder="Filter prompt words…" v-model="words.filter" style="width:100%;margin-bottom:8px">
-          <div v-if="words.loading" class="rmx-mut">Loading…</div>
-          <div v-else class="mb-words-list">
-            <div v-for="w in filteredWords" :key="w.t" class="mb-word" @click="pickWord(w)"><span>{{ w.t }}</span><span class="rmx-mut">{{ w.n }}</span></div>
-            <div v-if="!filteredWords.length" class="rmx-mut" style="padding:12px">No matches</div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `,
-};
 
 // Read the values a media was actually generated with (loras, steps, cfg, size,
 // prompt…) out of its embedded litegraph and write them onto the field config.
@@ -862,7 +597,7 @@ function prefillFromEmbedded(fields, wfGraph) {
 // ── The dialog ─────────────────────────────────────────────────────────────
 export default {
   name: 'RemixDialog',
-  components: { FieldControl, MediaBrowser },
+  components: { WorkflowFields, MediaTile },
   props: {
     // The media being remixed, in the listing's own shape: { path, name,
     // isVideo/isImage/isAudio, v }. `path` is absolute and on Windows arrives
@@ -1215,40 +950,16 @@ export default {
     // by node id at run and would silently follow you to an unrelated graph.
     watch(() => src.value.path, () => {
       for (const k of Object.keys(nodeEdits)) delete nodeEdits[k];
-      nodeFilter.value = ''; wfSave.open = false; picker.open = false; lightbox.open = false;
+      nodeFilter.value = ''; wfSave.open = false;
       init();
     });
     watch(wf, () => { startedId.value = null; if (skipNextFieldLoad) { skipNextFieldLoad = false; return; } loadFields(); });
 
-    const enabledFields = computed(() => cfg.fields.filter(f => f.enabled).slice().sort(loraLast));
-    const hiddenFields = computed(() => cfg.fields.filter(f => !f.enabled).slice().sort(loraLast));
-    const isWide = f => WIDE.has(f.kind);
-    // Group the non-lora controls by the graph node they came from (each group
-    // on its own line under a small node-title heading). LoRAs stay separate.
-    const nodeGroups = computed(() => {
-      const byKey = new Map();
-      for (const f of enabledFields.value) {
-        if (/^lora/.test(f.kind)) continue;
-        const t = (f.targets || [])[0] || {};
-        const key = String(t.nodeId) + '|' + (t.title || t.class || '');
-        let g = byKey.get(key);
-        if (!g) { g = { key, title: t.title || t.class || ('#' + t.nodeId), fields: [] }; byKey.set(key, g); }
-        g.fields.push(f);
-      }
-      const all = [...byKey.values()];
-      // Titled group only for nodes with 2+ controls; single-control nodes flow
-      // together in one row (so e.g. separate Width/Height primitives sit side by side).
-      return { titled: all.filter(g => g.fields.length >= 2), loose: all.filter(g => g.fields.length < 2).flatMap(g => g.fields) };
-    });
     // The image field holding a multi-file pick, if any. Only one field can drive a
     // batch — fanning out over two of them would multiply into a job matrix nobody
     // asked for, so the first one wins and the others keep their single value.
     const batchField = computed(() => cfg.fields.find(f => f.enabled && f.kind === 'image_input' && Array.isArray(f.values) && f.values.length > 1) || null);
     const batchCount = computed(() => (batchField.value ? batchField.value.values.length : 0));
-    const enabledLoras = computed(() => enabledFields.value.filter(f => /^lora/.test(f.kind)));
-    const loraHigh = computed(() => enabledLoras.value.filter(f => f.variant === 'high'));
-    const loraLow = computed(() => enabledLoras.value.filter(f => f.variant === 'low'));
-    const loraOther = computed(() => enabledLoras.value.filter(f => f.variant !== 'high' && f.variant !== 'low'));
     function collectFieldValues() {
       const fv = {};
       for (const f of cfg.fields) { if (!f.enabled) continue; const t = ctype(f);
@@ -1295,11 +1006,33 @@ export default {
       startedId.value = launchJob(Object.assign({}, base, { fieldValues: collectFieldValues(), mediaFields }));
     }
     function close() { emit('close'); }
-    // In-dialog lightbox for the run's output thumbnails (‹ › + keyboard nav).
-    const lightbox = reactive({ open: false, idx: 0 });
-    const lbItems = computed(() => (job.value && job.value.results) || []);
-    const lbCur = computed(() => { const f = lbItems.value[lightbox.idx]; return f ? { path: f.path, name: f.name, isVideo: isVideoName(f.name), url: fileUrl(f.path, f.v) } : null; });
-    function openResult(i) { lightbox.idx = i; lightbox.open = true; }
+    // An output is a media file like any other, so its tile does what a tile in
+    // the browser does: the thumbnail opens the viewer, the info bar reopens
+    // Remix on it. Both leave this dialog first — the viewer is a route and
+    // would come up underneath, and a second Remix has to be the shell's copy
+    // (keyed on path) rather than one dialog stacked on another.
+    const router = useRouter();
+    // The results carry only what the reconciler recorded, so they are mapped to
+    // the listing's shape once here — as a computed, not per render, or every
+    // tile would get a freshly-built prop object each time the dialog redraws,
+    // which during a run is every progress tick. `size`/`workflow`/`nsfw` are
+    // absent rather than false: the tile renders what it is given.
+    const resultTiles = computed(() => ((job.value && job.value.results) || []).map(f => ({
+      path: f.path, name: f.name, v: f.v, thumbV: f.thumbV,
+      thumb: !!f.thumbPath, isVideo: isVideoName(f.name), isImage: !isVideoName(f.name),
+    })));
+    async function openResultFile(t) {
+      if (!store.roots.out && !store.roots.fav) { try { store.roots = await api.roots(); } catch (e) {} }
+      const to = viewTo(t.path, store.roots);
+      if (!to) { showToast('That output is outside the media roots — open it from its folder instead'); return; }
+      emit('close');
+      router.push(to);
+    }
+    function remixResult(t) {
+      emit('close');
+      store.ui.remix = t;
+    }
+
     // Waiting cells: one per run still owed, but only while the job is live.
     // A job that ends short (cancelled, or 'lost' with fewer outputs than runs)
     // must not sit there spinning for images that are never coming.
@@ -1308,16 +1041,7 @@ export default {
       if (!j || j.status !== 'running') return 0;
       return Math.max(0, (j.runs || 1) - j.results.length);
     });
-    function lbNav(d) { const ni = lightbox.idx + d; if (ni >= 0 && ni < lbItems.value.length) lightbox.idx = ni; }
-    const onKey = e => {
-      if (lightbox.open) {
-        if (e.key === 'Escape') lightbox.open = false;
-        else if (e.key === 'ArrowLeft') lbNav(-1);
-        else if (e.key === 'ArrowRight') lbNav(1);
-        return;
-      }
-      if (e.key === 'Escape') close();
-    };
+    const onKey = e => { if (e.key === 'Escape') close(); };
     onMounted(() => { window.addEventListener('keydown', onKey); document.body.classList.add('rmx-noscroll'); });
     onUnmounted(() => { window.removeEventListener('keydown', onKey); document.body.classList.remove('rmx-noscroll'); });
 
@@ -1366,188 +1090,6 @@ export default {
       return [k, { editable, raw: v, num: typeof v === 'number', disp: typeof v === 'string' ? v : JSON.stringify(v) }];
     });
 
-    // Gallery picker — opens a reusable MediaBrowser over the dialog.
-    const picker = reactive({ open: false, type: 'image' });
-    let pickerField = null;
-    function openPicker(field) { pickerField = field; const k = field.kind; picker.type = k === 'video_input' ? 'video' : k === 'audio_input' ? 'audio' : 'image'; picker.open = true; }
-    // Apply hands back an array (multi-select); a single-pick browser still sends a
-    // bare path. `value` stays the first file so every existing single-image code path
-    // is unchanged; `values` is the batch the Run button fans out over.
-    function onPick(paths) {
-      const list = (Array.isArray(paths) ? paths : [paths]).filter(Boolean);
-      if (pickerField && list.length) {
-        pickerField.value = list[0];
-        pickerField.values = list.length > 1 ? list : null;
-      }
-      picker.open = false;
-    }
-    provide('openPicker', openPicker);
-
-    // Add-LoRA-row support: available lora files + a handler that adds a row and,
-    // when the workflow has a High + Low pair of Power Lora Loaders, mirrors the
-    // add into the other loader (swapping the high/low token in the filename).
-    const loraOptions = ref([]);
-    const loraTerms = ref(null);   // word -> how many loras carry it; built server-side from the library
-    (async () => {
-      try {
-        const d = await jget('/api/loras');
-        loraOptions.value = (d && d.loras) || [];
-        loraTerms.value = (d && d.index && d.index.terms) || null;
-      } catch (e) {}
-    })();
-    // High <-> Low swap. `\b` is useless here: `_` is a word character, so
-    // /\bhigh\b/ never fires inside a name like NAME_I2V_14B_HIGH_V2 — the
-    // dominant naming convention in the library — and the swap used to return the name
-    // untouched, which sent the HIGH file straight into the LOW stack. A
-    // separator is "anything that isn't a letter", and the replacement copies
-    // the original's case so HIGH/High/high all land on real filenames.
-    // HN/LN is the same distinction abbreviated; one pair in the library uses it
-    // and would otherwise mirror the high file into the low stack.
-    const NOISE_PAIRS = [['high', 'low'], ['hn', 'ln']];
-    function swapHiLo(name, toLow) {
-      if (!name) return name;
-      let out = String(name);
-      for (const [hi, lo] of NOISE_PAIRS) {
-        const from = toLow ? hi : lo, to = toLow ? lo : hi;
-        out = out.replace(new RegExp('(^|[^A-Za-z])' + from + '(?![A-Za-z])', 'gi'), (m, pre) => {
-          const body = m.slice(pre.length);
-          const rep = body === body.toUpperCase() ? to.toUpperCase()
-                    : body[0] === body[0].toUpperCase() ? to[0].toUpperCase() + to.slice(1)
-                    : to;
-          return pre + rep;
-        });
-      }
-      return out;
-    }
-    const nameIsHigh = n => swapHiLo(n, true) !== n;
-    const nameIsLow = n => swapHiLo(n, false) !== n;
-    const hasNoiseMark = n => nameIsHigh(n) || nameIsLow(n);
-    // Filenames disagree on case — "…-HIGH-v1.0" sits next to "…-low-v1.0" — so
-    // the library is matched case-insensitively and the real spelling returned.
-    const loraByLower = computed(() => {
-      const m = new Map();
-      for (const l of loraOptions.value) m.set(String(l).toLowerCase(), l);
-      return m;
-    });
-    // Which noise level a loader is. Not from the label: these nodes carry no
-    // title, so the field is called "LoRAs (#185)" and variant is empty. The
-    // reliable evidence is what is already loaded in it — a stack whose rows
-    // say high_noise IS the high one.
-    function loraFieldIsHigh(field) {
-      const hay = String((field && field.label) || '') + ' ' + String((field && field.nodeTitle) || '');
-      if (/high/i.test(hay)) return true;
-      if (/low/i.test(hay)) return false;
-      let hi = 0, lo = 0;
-      for (const r of (Array.isArray(field && field.value) ? field.value : [])) {
-        const n = String((r && r.lora) || '');
-        if (swapHiLo(n, true) !== n) hi++;
-        else if (swapHiLo(n, false) !== n) lo++;
-      }
-      return hi === lo ? null : hi > lo;
-    }
-    const newLoraRow = (lora, on) => ({ slot: null, on: on !== false, lora, strength: 1, strengthTwo: null, _new: true });
-    // What the *other* loader should receive, or null for "nothing". A lora with
-    // no high/low marker applies to both stacks, so it mirrors as-is. One that is
-    // explicitly HIGH must never be copied verbatim into the low stack: if its
-    // LOW counterpart isn't installed the pair just stays one-sided, which is
-    // recoverable, where a high-noise lora running at low noise is not.
-    function counterpartFor(lora, other, field) {
-      if (!hasNoiseMark(lora)) return lora;
-      let otherHigh = loraFieldIsHigh(other);
-      if (otherHigh === null) { const h = loraFieldIsHigh(field); otherHigh = h === null ? null : !h; }
-      if (otherHigh === null) return null;
-      const cand = swapHiLo(lora, !otherHigh);
-      return loraByLower.value.get(String(cand).toLowerCase()) || null;
-    }
-    function addLoraRow(field, lora) {
-      if (!lora) return;
-      if (!Array.isArray(field.value)) field.value = [];
-      field.value.push(newLoraRow(lora, true));
-      // High/Low sync: mirror into the paired loader when there are exactly two.
-      const loraFields = cfg.fields.filter(f => f.enabled && f.kind === 'lora_list');
-      if (loraFields.length !== 2) return;
-      const other = loraFields.find(f => f.id !== field.id);
-      if (!other) return;
-      const otherLora = counterpartFor(lora, other, field);
-      if (!otherLora) return;
-      if (!Array.isArray(other.value)) other.value = [];
-      other.value.push(newLoraRow(otherLora, true));
-    }
-    // loraOptions stays dialog-local: suggestLibrary and the high/low pair lookup
-    // read it here, and nothing injects it since the Add LoRA box went.
-    provide('addLoraRow', addLoraRow);
-
-    // Words in the *positive* prompt only — a lora surfacing because the thing
-    // you asked NOT to see is named in the negative prompt would be backwards.
-    const promptWords = computed(() => {
-      const f = cfg.fields.find(x => x.kind === 'prompt' && x.enabled && !x.variant);
-      return loraWords(f ? f.value : '');
-    });
-    provide('promptWords', promptWords);
-    provide('loraTerms', loraTerms);
-
-    // Library suggestions: loras the prompt names that this workflow's loader
-    // doesn't carry at all. The rows in the graph are only the ones someone
-    // wired up once; the library is everything ComfyUI can load, so a matching
-    // lora that was never added is exactly the one worth surfacing.
-    //
-    // Offered by the first loader only. With a High/Low pair both loaders would
-    // otherwise show the same suggestion twice, and ticking either one calls
-    // addLoraRow, which already mirrors the opposite variant into the other.
-    const LIB_SUGGEST_MAX = 8;
-    const firstLoraFieldId = computed(() => {
-      const f = cfg.fields.find(x => x.enabled && x.kind === 'lora_list');
-      return f ? f.id : null;
-    });
-    function suggestLibrary(field) {
-      const words = promptWords.value, terms = loraTerms.value;
-      if (!words.size || !terms || !loraOptions.value.length) return { list: [], cap: LIB_SUGGEST_MAX };
-      // Anything already wired into any loader is not a suggestion — it is a row.
-      const have = new Set();
-      for (const f of cfg.fields) {
-        if (f.kind !== 'lora_list' || !Array.isArray(f.value)) continue;
-        for (const r of f.value) if (r && r.lora) have.add(canonLora(r.lora));
-      }
-      const pair = cfg.fields.filter(f => f.enabled && f.kind === 'lora_list').length === 2;
-      const wantHigh = loraFieldIsHigh(field);
-      const seen = new Set(), out = [];
-      for (const name of loraOptions.value) {
-        const key = canonLora(name);
-        if (have.has(key) || seen.has(key)) continue;
-        let match = '', df = Infinity;
-        for (const w of loraWords(shortLora(name))) {
-          const c = terms[w];
-          if (c === undefined || !words.has(w)) continue;
-          if (c < df) { df = c; match = w; }
-        }
-        if (!match) continue;
-        // Show the half of the pair that belongs in this loader, so addLoraRow's
-        // high/low swap sends the right file to each side. A candidate for the
-        // opposite side whose counterpart isn't installed is dropped rather than
-        // offered: ticking it would load a low-noise lora into the high stack.
-        // Decided before `seen` is marked, so skipping one half leaves the other
-        // half free to be offered when the scan reaches it.
-        let use = name;
-        if (pair && wantHigh !== null && hasNoiseMark(name)) {
-          const alt = loraByLower.value.get(swapHiLo(name, !wantHigh).toLowerCase());
-          if (alt) use = alt;
-          else if (wantHigh ? nameIsLow(name) : nameIsHigh(name)) continue;
-        }
-        seen.add(key);
-        out.push({ lora: use, match, df });
-      }
-      // Longest matched word first. Library rarity is a poor proxy for how much
-      // a match is worth — "woman" occurs in exactly one filename here, making it
-      // the rarest word and the least useful hit — whereas a long word is a
-      // specific concept, so "deepthroat" outranks "face".
-      out.sort((a, b) => b.match.length - a.match.length || a.df - b.df || a.lora.localeCompare(b.lora));
-      // Full list; the field caps it to LIB_SUGGEST_MAX and expands on demand.
-      // It used to hard-truncate here and point at the Add LoRA box for the
-      // rest — with that box gone, truncating would strand those loras.
-      return { list: out, cap: LIB_SUGGEST_MAX };
-    }
-    provide('suggestLibrary', suggestLibrary);
-    provide('firstLoraFieldId', firstLoraFieldId);
 
     // ── Workflow library: enable any workflow already in the ComfyUI folder ──
     // The Inherit → save flow only covers graphs embedded in a media file; this is
@@ -1607,10 +1149,10 @@ export default {
       wfLib.busy = false;
     }
 
-    return { src, tab, runCount, batchCount, workflows, wf, wfGroups, cfg, selectedPreset, scSaving, scSaved, canShortcut, shortcutHint, saveShortcut, deleteShortcut, isShortcut, currentWfLabel, currentWfShort,
-      canUpdateWf, wfUpdating, wfUpdated, updateWorkflow, meta, job, isVideo, mediaUrl, toolsMenu, toolItem, enabledFields, hiddenFields, isWide, nodeGroups, enabledLoras, loraHigh, loraLow, loraOther, remix, cancelJob, close, jobThumb, thumbFail, saveMsg, nodeFilter, saveLog, filteredNodes, nodeInputs, picker, onPick,
+    return { store, src, tab, runCount, batchCount, workflows, wf, wfGroups, cfg, selectedPreset, scSaving, scSaved, canShortcut, shortcutHint, saveShortcut, deleteShortcut, isShortcut, currentWfLabel, currentWfShort,
+      canUpdateWf, wfUpdating, wfUpdated, updateWorkflow, meta, job, isVideo, mediaUrl, toolsMenu, toolItem, remix, cancelJob, close, saveMsg, nodeFilter, saveLog, filteredNodes, nodeInputs,
       replacements, replAllOn, replActiveCount, addRepl, delRepl, swapRepl, toggleReplAll, saveReplacements, nodeEdits, editVal, setEdit,
-      lightbox, lbItems, lbCur, openResult, lbNav, pendingSlots, prog, wfSave, wfNameTaken, openWfSave, saveEmbeddedWf,
+      resultTiles, openResultFile, remixResult, pendingSlots, prog, wfSave, wfNameTaken, openWfSave, saveEmbeddedWf,
       wfLib, wfLibShown, wfLibCount, wfLibDupes, openWfLib, saveWfLib, addUnlistedWf, fileUrl };
   },
   template: `
@@ -1689,41 +1231,7 @@ export default {
             </div>
             <div v-else-if="cfg.error" class="rmx-mut">Couldn’t load fields: {{ cfg.error }}</div>
             <div v-else>
-              <div v-if="nodeGroups.loose.length" class="rmx-grid">
-                <div v-for="f in nodeGroups.loose" :key="f.id" class="rmx-field" :class="{wide: isWide(f)}">
-                  <label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" checked @change="f.enabled=false" title="Hide field"> {{ f.label }} <span v-if="f.help" class="rmx-info" tabindex="0" @click.prevent.stop><span class="rmx-tip">{{ f.help }}</span>i</span> <span v-if="f.unreachable" style="color:#ff9f0a" title="not on the output path">⚠</span></label>
-                  <field-control :field="f"></field-control>
-                </div>
-              </div>
-              <div v-for="g in nodeGroups.titled" :key="g.key" class="rmx-nodegroup">
-                <div class="rmx-nodegroup-title">{{ g.title }}</div>
-                <div class="rmx-grid">
-                  <div v-for="f in g.fields" :key="f.id" class="rmx-field" :class="{wide: isWide(f)}">
-                    <label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" checked @change="f.enabled=false" title="Hide field"> {{ f.label }} <span v-if="f.help" class="rmx-info" tabindex="0" @click.prevent.stop><span class="rmx-tip">{{ f.help }}</span>i</span> <span v-if="f.unreachable" style="color:#ff9f0a" title="not on the output path">⚠</span></label>
-                    <field-control :field="f"></field-control>
-                  </div>
-                </div>
-              </div>
-              <div v-if="loraHigh.length || loraLow.length" class="rmx-lora-cols">
-                <div class="rmx-lora-col">
-                  <div class="rmx-nodegroup-title">High-noise LoRAs</div>
-                  <div v-for="f in loraHigh" :key="f.id" class="rmx-field"><label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" checked @change="f.enabled=false" title="Hide field"> {{ f.label }}</label><field-control :field="f"></field-control></div>
-                </div>
-                <div class="rmx-lora-col">
-                  <div class="rmx-nodegroup-title">Low-noise LoRAs</div>
-                  <div v-for="f in loraLow" :key="f.id" class="rmx-field"><label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" checked @change="f.enabled=false" title="Hide field"> {{ f.label }}</label><field-control :field="f"></field-control></div>
-                </div>
-              </div>
-              <div v-if="loraOther.length" class="rmx-grid" style="margin-top:6px">
-                <div v-for="f in loraOther" :key="f.id" class="rmx-field wide">
-                  <label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" checked @change="f.enabled=false" title="Hide field"> {{ f.label }}</label>
-                  <field-control :field="f"></field-control>
-                </div>
-              </div>
-              <div v-if="!enabledFields.length" class="rmx-mut">No fields enabled — see hidden list.</div>
-              <div v-if="cfg.presets.length" style="margin-top:12px"><label class="rmx-lbl" style="margin-bottom:5px">Style preset</label>
-                <select class="rmx-inp" v-model="selectedPreset"><option value="">— none —</option><option v-for="p in cfg.presets" :key="p.title" :value="p.title">{{ p.title }}</option></select>
-              </div>
+              <workflow-fields :cfg="cfg" :preset="selectedPreset" @update:preset="selectedPreset = $event">
               <details class="rmx-repl">
                 <summary>Prompt Replacements<span class="rmx-mut" v-if="replActiveCount"> — {{ replActiveCount }} active</span><span class="rmx-mut" v-else-if="replacements.length"> — {{ replacements.length }} off</span></summary>
                 <div class="rmx-repl-body">
@@ -1739,9 +1247,7 @@ export default {
                   <button type="button" class="rmx-btn2" style="margin-top:6px" @click="addRepl">＋ Add replacement</button>
                 </div>
               </details>
-              <details class="rmx-hidden" v-if="hiddenFields.length"><summary>{{ hiddenFields.length }} hidden field{{ hiddenFields.length===1?'':'s' }}</summary>
-                <div class="rmx-field" v-for="f in hiddenFields" :key="f.id"><label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" @change="f.enabled=true" title="Show field"> {{ f.label }} <span class="rmx-mut" style="text-transform:none">· {{ f.kind }}</span></label><field-control :field="f"></field-control></div>
-              </details>
+              </workflow-fields>
             </div>
             <details class="rmx-hidden" v-if="meta.embedded" style="margin-top:12px">
               <summary>Source workflow · {{ Object.keys(meta.embedded).length }} nodes</summary>
@@ -1780,19 +1286,15 @@ export default {
                  queued run, and each becomes a thumbnail as that run lands. The
                  whole point is that a 3x job shows three slots immediately
                  rather than an empty space until the last one finishes. -->
-            <div v-if="job && (job.results.length || pendingSlots > 0)" class="rmx-outgrid">
-              <a v-for="(f,i) in job.results" :key="f.path" class="rmx-out" :href="fileUrl(f.path, f.v)" @click.prevent="openResult(i)" :title="f.name"><img :src="jobThumb(f)" @error="thumbFail" loading="lazy"></a>
+            <div v-if="job && (job.results.length || pendingSlots > 0)" class="rmx-outgrid" :class="{ 'blur-on': store.blurOn }">
+              <MediaTile v-for="t in resultTiles" :key="t.path" :item="t"
+                         @open="openResultFile(t)" @remix="remixResult(t)" />
               <div v-for="n in pendingSlots" :key="'wait'+n" class="rmx-out rmx-out-wait" :title="'Run ' + (job.results.length + n) + ' of ' + (job.runs || 1)"><span class="spinner"></span></div>
             </div>
           </div>
         </div>
       </div>
     </div>
-    <div v-if="picker.open" class="rmx-picker-overlay" data-backdrop @click.self="picker.open=false">
-      <div class="rmx-picker">
-        <div class="rmx-picker-head"><b>Pick {{ picker.type }}</b><button class="rmx-x" style="margin-left:auto" @click="picker.open=false">✕</button></div>
-        <media-browser :type="picker.type" :multi="picker.type==='image'" @pick="onPick"></media-browser>
-      </div>
     </div>
     <div v-if="wfLib.open" class="rmx-picker-overlay" data-backdrop @click.self="wfLib.open=false">
       <div class="rmx-picker" style="max-width:720px">
@@ -1801,11 +1303,12 @@ export default {
         <div style="overflow:auto;flex:1;min-height:0;padding:8px 12px">
           <div v-if="wfLib.busy && !wfLib.items.length" class="rmx-mut" style="padding:16px">Loading…</div>
           <div v-else-if="!wfLibShown.length" class="rmx-mut" style="padding:16px">No workflows match.</div>
-          <div v-for="w in wfLibShown" :key="w.name" class="rmx-field" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2c2c2e">
+          <div v-for="w in wfLibShown" :key="w.name" class="rmx-lib-row">
             <input type="checkbox" class="rmx-tgl" v-model="w.enabled" :title="w.enabled ? 'Remove from the dropdown' : 'Add to the dropdown'">
-            <input class="rmx-inp" v-model="w.label" placeholder="label" style="width:190px;flex:none" :title="'Shown in the Workflow dropdown'">
-            <span class="rmx-mut" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none" :title="w.name">{{ w.name }}</span>
-            <span v-if="w.enabled && wfLibDupes.has((w.label||w.name).trim().toLowerCase())" style="color:#ff9f0a;flex:none" title="Another enabled workflow uses this same label — rename one so you can tell them apart">⚠</span>
+            <input class="rmx-inp" v-model="w.label" placeholder="label" title="Shown in the Workflow dropdown">
+            <span class="rmx-mut rmx-lib-name" :title="w.name">{{ w.name }}</span>
+            <span v-if="w.enabled && wfLibDupes.has((w.label||w.name).trim().toLowerCase())" class="rmx-lib-warn"
+                  title="Another enabled workflow uses this same label — rename one so you can tell them apart">⚠</span>
           </div>
         </div>
         <div class="rmx-picker-head" style="border-top:1px solid #2c2c2e;border-bottom:none">
@@ -1815,16 +1318,6 @@ export default {
           <button class="rmx-btn2" :disabled="wfLib.busy" @click="saveWfLib">{{ wfLib.busy ? 'Saving…' : 'Save' }}</button>
         </div>
       </div>
-    </div>
-    <div v-if="lightbox.open" class="rmx-lb" data-backdrop @click.self="lightbox.open=false">
-      <button class="rmx-lb-x" @click="lightbox.open=false" title="Close (Esc)">✕</button>
-      <button class="rmx-lb-nav prev" @click="lbNav(-1)" :disabled="lightbox.idx<=0" title="Previous (←)">‹</button>
-      <div class="rmx-lb-body">
-        <video v-if="lbCur && lbCur.isVideo" :key="lbCur.path" :src="lbCur.url" controls autoplay loop></video>
-        <img v-else-if="lbCur" :key="lbCur.path" :src="lbCur.url" :alt="lbCur.name">
-      </div>
-      <button class="rmx-lb-nav next" @click="lbNav(1)" :disabled="lightbox.idx>=lbItems.length-1" title="Next (→)">›</button>
-      <div class="rmx-lb-label">{{ lbCur ? lbCur.name : '' }}<span class="rmx-mut" v-if="lbItems.length>1"> · {{ lightbox.idx+1 }} / {{ lbItems.length }}</span></div>
     </div>
   `,
 };

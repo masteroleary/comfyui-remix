@@ -33,6 +33,8 @@ export default {
       // exactly where a fresh install lands needing the media root set.
       out.push({ key: 'jobs', icon: '⚡', label: 'Jobs', sub: 'Running and completed runs',
                  action: () => { store.ui.remix = null; store.ui.jobs = true; } });
+      out.push({ key: 'workflows', icon: '🧩', label: 'Workflows', sub: 'The library Remix runs from',
+                 to: { name: 'workflows' } });
       out.push({ key: 'settings', icon: '⚙', label: 'Settings', sub: 'Paths, ports and privacy',
                  to: { name: 'settings' } });
       // Last tile, and only when a password is actually in use. The shell hides

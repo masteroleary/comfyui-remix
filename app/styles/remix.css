@@ -4,7 +4,7 @@
    page's second <style> block so the dialog looks exactly as it did; the
    comments are the originals and explain the parts that are not obvious.
 
-   Dialog stack, top to bottom: .rmx-lb 3300, .rmx-picker-overlay 3100,
+   Dialog stack, top to bottom: .rmx-picker-overlay 3100,
    .rmx-overlay 3000, .rmx-topbar 2950, .rmx-fab 2900.
 
    Colours are literal rather than common.css tokens on purpose: this block is
@@ -46,8 +46,23 @@ body.rmx-noscroll{overflow:hidden !important;overscroll-behavior:none}
 select.rmx-inp{cursor:pointer}
 .rmx-grid{display:flex;flex-wrap:wrap;gap:14px}
 .rmx-field{display:flex;flex-direction:column;gap:5px}
+/* One workflow in the library picker. A row of its own rather than .rmx-field:
+   that class stacks (flex-direction:column), which an inline display:flex does
+   not undo — the tick, the label box and the filename ended up on three lines. */
+.rmx-lib-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2c2c2e}
+.rmx-lib-row .rmx-inp{width:190px;flex:none}
+.rmx-lib-row .rmx-tgl{flex:none}
+.rmx-lib-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rmx-lib-warn{flex:none;color:#ff9f0a}
+/* The filename is the part that can go; the tick and the label box are the
+   controls, so they keep their size and it takes what is left. */
+@media (max-width:520px){.rmx-lib-row .rmx-inp{width:118px}}
 .rmx-field.wide{flex-basis:100%}
 .rmx-lbl{display:flex;align-items:center;gap:6px;font-size:12px;color:#8e8e93;text-transform:uppercase;letter-spacing:.4px}
+/* A label is a click target for the checkbox inside it, so it has to stop at
+   its text. Full width meant the empty space beside a short label — the gap
+   above a field's 🖼 Browse button, say — silently switched the field off. */
+.rmx-field > .rmx-lbl{align-self:flex-start;width:max-content;max-width:100%}
 .rmx-tgl{width:15px;height:15px;accent-color:#0a84ff;cursor:pointer}
 .rmx-mut{color:#8e8e93}
 /* Field-build progress. The bar is determinate only while there is something
@@ -106,7 +121,9 @@ select.rmx-inp{cursor:pointer}
 .rmx-log .ll-err{color:#ff6b6b}
 .rmx-log .ll-done{color:#a8e06c}
 .rmx-log .ll-warn{color:#ffcf6b}
-.rmx-outgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:6px;margin-top:12px}
+/* Wider cells than bare thumbnails needed: the tiles carry a name, a size and
+   the remix badge under the still, the same as the browser's grid. */
+.rmx-outgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(124px,1fr));gap:8px;margin-top:12px}
 .rmx-out{display:block;border:1px solid #38383a;border-radius:8px;overflow:hidden;aspect-ratio:1}
 /* Labelled buttons are far wider than the icons they replaced, so this row
    wraps rather than squashing them or pushing the dialog sideways. */
@@ -199,20 +216,22 @@ select.rmx-inp{cursor:pointer}
 .rmx-repl-del{flex:none;width:30px;padding:6px 0;background:#3a1e1e;color:#e06c6c;border:1px solid #5a2a2a;border-radius:8px;cursor:pointer;font-size:12px}
 .rmx-repl-del:hover{border-color:#e06c6c}
 .rmx-nodegroup{margin:2px 0 10px}
+/* Family pills above the first lora section. Same language as the .rmx-tabs
+   switch — quiet until on — but they wrap: there are several, and a phone is
+   390px wide. */
+.rmx-fams{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:18px 0;padding:6px 0}
+.rmx-fams-lbl{font-size:12px;color:#8e8e93;text-transform:uppercase;letter-spacing:.4px;margin-right:2px}
+.rmx-fam{
+  background:#1c1c1e;border:1px solid #2c2c2e;border-radius:999px;
+  color:#8e8e93;padding:4px 11px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+}
+.rmx-fam:hover{border-color:#0a84ff;color:#c7c7cc}
+.rmx-fam.on{background:#0a84ff;border-color:#0a84ff;color:#fff}
+.rmx-fams-note{font-size:11px;color:#636366}
 .rmx-lora-cols{display:flex;gap:16px;margin-top:6px}
 .rmx-lora-col{flex:1;min-width:0}
 @media (max-width:640px){.rmx-lora-cols{flex-direction:column;gap:8px}}
 .rmx-nodegroup-title{font-size:10px;color:#7d7d82;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 5px;border-bottom:1px solid #2c2c2e;padding-bottom:3px}
-.rmx-lb{position:fixed;inset:0;z-index:3300;background:#000e;display:flex;align-items:center;justify-content:center;padding:20px}
-.rmx-lb-body{max-width:100%;max-height:100%;display:flex;align-items:center;justify-content:center}
-.rmx-lb-body img,.rmx-lb-body video{max-width:100%;max-height:86vh;border-radius:8px;background:#000}
-.rmx-lb-x{position:absolute;top:12px;right:16px;background:#0008;border:none;color:#fff;font-size:20px;width:40px;height:40px;border-radius:50%;cursor:pointer;z-index:2}
-.rmx-lb-nav{position:absolute;top:50%;transform:translateY(-50%);background:#0008;border:none;color:#fff;font-size:38px;line-height:1;width:50px;height:72px;border-radius:10px;cursor:pointer;z-index:2}
-.rmx-lb-nav.prev{left:12px}
-.rmx-lb-nav.next{right:12px}
-.rmx-lb-nav[disabled]{opacity:.2;cursor:default}
-.rmx-lb-label{position:absolute;bottom:14px;left:0;right:0;text-align:center;color:#fff;font-size:13px;padding:0 16px;text-shadow:0 1px 4px #000;pointer-events:none}
-@media (max-width:640px){.rmx-lb{padding:0}.rmx-lb-nav{background:#0005;width:44px;height:60px;font-size:32px}}
 .rmx-picker-overlay{position:fixed;inset:0;z-index:3100;background:#000c;display:flex;align-items:center;justify-content:center;padding:24px}
 .rmx-picker{position:relative;background:#141416;border:1px solid #38383a;border-radius:14px;width:100%;max-width:1000px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden}
 .rmx-picker-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #2c2c2e;font-size:13px;text-transform:capitalize}

@@ -57,7 +57,15 @@ export const api = {
   metadata: path => req('/api/metadata?path=' + enc(path)),
   workflows: () => req('/api/workflows'),
   workflowsAll: () => req('/api/workflows/all'),
+  // Replaces the whole library in one shot — send every enabled name and label,
+  // not a delta, or the ones left out are removed.
+  manageWorkflows: body => post('/api/workflows/manage', body),
   fieldConfig: name => req('/api/workflow-field-config?name=' + enc(name)),
+  // For a graph with no file behind it — the workflow embedded in a media file.
+  fieldConfigForGraph: workflow => post('/api/workflow-field-config', { workflow }),
+  // REPLACES the whole edits map for that workflow — merge into the config's
+  // own `savedEdits` before sending, or another page's edits go with it.
+  saveFieldConfig: (name, edits) => post('/api/workflow-field-config', { name, edits }),
   // Writes the on-screen values back into the workflow's own .json in ComfyUI.
   updateWorkflow: (name, fieldValues) => post('/api/workflows/update', { name, fieldValues }),
   saveShortcut: body => post('/api/shortcuts', body),

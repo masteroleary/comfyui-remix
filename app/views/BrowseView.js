@@ -5,14 +5,16 @@
 // which is what makes Back, refresh and deep links work at all (none of them did
 // before the rewrite).
 import { store, showToast, registerReload, toggleSelected } from '../store.js';
-import { api, thumbUrl } from '../api.js';
+import { api } from '../api.js';
 import { browseQuery, browseTo, viewTo } from '../router.js';
+import MediaTile from '../components/MediaTile.js';
 
 const { watch, onMounted, onUnmounted } = window.Vue;
 const { useRoute, useRouter } = window.VueRouter;
 
 export default {
   name: 'BrowseView',
+  components: { MediaTile },
   setup() {
     const route = useRoute();
     const router = useRouter();
@@ -65,8 +67,10 @@ export default {
     // The listing marks folders with isDir — there is no `type` field on an item.
     const open = item => {
       if (store.multiSelect) { toggleSelected(item.path); return; }
-      if (item.isDir) router.push(browseTo({ dir: item.path }, null, store.roots));
-      else router.push(viewTo(item.path, store.roots));
+      if (item.isDir) { router.push(browseTo({ dir: item.path }, null, store.roots)); return; }
+      const to = viewTo(item.path, store.roots);
+      if (to) router.push(to);
+      else showToast('Cannot open that file from here — it is outside the media roots');
     };
 
     // The info bar under the thumbnail is a hit area of its own, as it was
@@ -83,13 +87,7 @@ export default {
       store.ui.remix = item;
     };
 
-    // Type badge on the thumb. Folders are excluded rather than tested for a
-    // dot, or a folder named "v1.5" would claim an extension of "5".
-    const ext = it => (!it.isDir && it.name.includes('.') ? it.name.split('.').pop().toLowerCase() : '');
-    const extColor = it => (it.isVideo ? 'var(--video)' : it.isImage ? 'var(--image)'
-      : it.isAudio ? 'var(--audio)' : 'var(--text3)');
-
-    return { store, open, openRemix, canRemix, ext, extColor, thumbUrl };
+    return { store, open, openRemix };
   },
   template: `
     <div class="browse" :class="{ 'blur-on': store.blurOn }">
@@ -97,38 +95,9 @@ export default {
       <div v-else-if="store.error" class="loading">{{ store.error }}</div>
       <div v-else-if="!store.items.length" class="loading">Nothing here.</div>
       <div v-else class="grid">
-        <button v-for="it in store.items" :key="it.path" class="card"
-                :class="{ 'is-dir': it.isDir, 'is-selected': store.selected.has(it.path) }"
-                @click="open(it)">
-          <span class="card-thumb">
-            <span class="card-icon" v-if="it.isDir">📁</span>
-            <img v-else-if="it.thumb || it.isImage" loading="lazy"
-                 :src="thumbUrl(it.path, it.thumbV || it.v)" :alt="it.name">
-            <span class="card-icon" v-else>{{ it.isVideo ? '🎬' : it.isAudio ? '🎵' : '📄' }}</span>
-            <!-- A video thumbnail is a still: without the marker it reads as an image. -->
-            <span v-if="it.isVideo" class="play-overlay"><span class="play-circle">
-              <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></span></span>
-            <span v-if="ext(it)" class="ext-badge" :style="{ color: extColor(it) }">{{ ext(it) }}</span>
-            <!-- Both flags ride along on every listing already; the tile is where
-                 they are worth anything, since the alternative is opening the file
-                 to find out whether it carries a graph. -->
-            <span v-if="it.workflow || it.nsfw" class="card-tags">
-              <span v-if="it.workflow" class="card-tag" title="Has an embedded workflow">wf</span>
-              <span v-if="it.nsfw" class="card-tag nsfw" title="Prompt matched the content filter">18+</span>
-            </span>
-          </span>
-          <span class="card-info" :class="{ 'is-remix': canRemix(it) }"
-                :title="canRemix(it) ? 'Remix ' + it.name : it.name"
-                @click.stop="openRemix(it)">
-            <span class="card-info-text">
-              <span class="card-name">{{ it.name }}</span>
-              <span v-if="it.size" class="card-meta">{{ it.size }}</span>
-            </span>
-            <span v-if="canRemix(it)" class="meta-badge" title="Remix this workflow">
-              <svg viewBox="0 0 24 24"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
-            </span>
-          </span>
-        </button>
+        <MediaTile v-for="it in store.items" :key="it.path" :item="it"
+                   :selected="store.selected.has(it.path)"
+                   @open="open(it)" @remix="openRemix(it)" />
       </div>
     </div>
   `,

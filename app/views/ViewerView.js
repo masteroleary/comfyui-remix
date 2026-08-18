@@ -199,7 +199,11 @@ export default {
     async function show(i) {
       const it = list.value[i];
       if (!it || same(it.path, abs.value)) return;
-      try { await router.replace(viewTo(it.path, store.roots)); }
+      // viewTo answers null for a path under neither root; replace(null) would
+      // throw into the catch below and read as a failed navigation.
+      const to = viewTo(it.path, store.roots);
+      if (!to) { console.warn('[viewer] no route for', it.path); return; }
+      try { await router.replace(to); }
       catch (e) { console.warn('[viewer] navigation failed', e); return; }
       await nextTick();
     }
@@ -364,13 +368,14 @@ export default {
     }
 
     // ── Actions ──────────────────────────────────────────────────────────
-    // Metadata/workflow for this file. Still the standalone inspector page,
-    // which InspectView hands off to.
+    // Where the inspector lives for this file. The viewer no longer offers it
+    // as a button — Remix is the way in, and the workflow half of the inspector
+    // is reached from the Workflows page — but the fallback below still needs a
+    // route to send you to when the dialog's module will not load.
     const inspectTo = it => ({
       path: '/inspect',
       query: { path: it.path, name: it.name, type: it.isVideo ? 'video' : it.isImage ? 'image' : 'audio' },
     });
-    function inspect() { if (cur.value) { slideStop(); router.push(inspectTo(cur.value)); } }
 
     // Remix hands this file to the workflow dialog, which opens OVER the viewer
     // (.rmx-overlay is z-index 3000 to the viewer's 200) and closes back to it —
@@ -543,7 +548,7 @@ export default {
       prev, next, togglePlay, toggleVideoPlay, toggleMute, close,
       onMediaClick, onVideoPlaying, onVideoEnd, onVideoError,
       onTouchStart, onTouchEnd,
-      remix, remixing, inspect, askFav, askDel, ask, confirmOk,
+      remix, remixing, askFav, askDel, ask, confirmOk,
       tools, toolsOpen, toolRunning, toolsEl, pickTool,
       vid,
     };
@@ -556,7 +561,7 @@ export default {
         <button v-if="cur && (cur.isImage || cur.isVideo)" class="viewer-act-btn m-remix" @click="remix" title="Remix this file">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="vertical-align:-2px"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg> Remix
         </button>
-        <button v-if="cur" class="viewer-act-btn m-info" @click="inspect" title="Workflow and metadata for this file">🔍 Inspect</button>
+
         <div v-if="cur" class="tools-wrap" ref="toolsEl">
           <button class="viewer-act-btn m-tools" :class="{ on: toolsOpen }" @click.stop="toolsOpen = !toolsOpen" title="Tools for this file">
             🛠 Tools <span style="font-size:9px;opacity:.7">{{ toolsOpen ? '▲' : '▼' }}</span>

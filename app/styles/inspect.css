@@ -15,18 +15,20 @@
    survive a component that can mount twice, and "hide the classic controls in
    fields mode" is a v-show in the template now, not a stylesheet override. */
 
-.inspect{padding:16px;padding-bottom:calc(16px + var(--safe-b))}
+/* Top padding matches the shell's fixed ⚙/logout (top:10px + the safe inset),
+   so the row's own buttons land on that same line instead of below it. */
+.inspect{padding:16px;padding-top:calc(10px + var(--safe-t));padding-bottom:calc(16px + var(--safe-b))}
 
 /* ── Header ───────────────────────────────────────────────────────────────── */
-.inspect .top-bar{display:flex;flex-direction:column;gap:4px;margin-bottom:16px}
+.inspect .top-bar{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
 .inspect .top-bar h1{
-  width:100%;font-size:13px;font-weight:400;color:var(--text2);
+  flex:1;min-width:0;font-size:13px;font-weight:400;color:var(--text2);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  /* room for the shell's fixed logout control, which used to be a button in
-     this bar and now floats over the top-right corner */
-  padding-right:44px;
 }
-.inspect .top-bar-row{display:flex;align-items:center;gap:8px;width:100%;flex-wrap:wrap}
+/* The shell floats ⚙ (and logout, when a password is in use) over the top-right
+   corner, so the row keeps that much clear rather than running under them. */
+.inspect .top-bar-row{display:flex;align-items:center;gap:8px;width:100%;padding-right:44px}
+html.auth-on .inspect .top-bar-row{padding-right:88px}
 
 .inspect .btn{
   padding:10px 20px;border:none;border-radius:8px;font-size:14px;font-weight:600;
@@ -53,14 +55,11 @@
 .inspect .status{font-size:13px;color:var(--text2);margin-left:8px}
 
 /* ── Tabs ─────────────────────────────────────────────────────────────────── */
-.inspect .tabs{display:flex;margin-bottom:12px;border-bottom:1px solid var(--border)}
-.inspect .tab{
-  padding:10px 20px;background:none;border:none;color:var(--text2);
-  font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;
-  border-bottom:2px solid transparent;margin-bottom:-1px;
-}
-.inspect .tab.active{color:var(--text);border-bottom-color:var(--accent)}
-.inspect .tab:hover{color:var(--text)}
+/* The switch itself is remix.css's .rmx-tabs — the same control the dialog
+   carries, not a second one that looks like it. There it is a flex item and
+   shrinks to its buttons; here it is a block, so it has to be told not to span
+   the page. */
+.inspect .rmx-tabs{width:max-content;max-width:100%;margin-bottom:12px;font-family:inherit}
 
 /* ── Preview ──────────────────────────────────────────────────────────────── */
 .inspect .media-wrap{margin:16px 0;max-width:800px}
@@ -274,80 +273,6 @@
 .inspect .output-hdr{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .inspect .output-hdr h3{font-size:14px;color:var(--text2);margin:0}
 .inspect .output-bulk{margin-left:auto;display:flex;gap:6px}
-.inspect .output-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px}
-.inspect .output-card{
-  background:var(--surface);border:1px solid var(--border);border-radius:8px;
-  overflow:hidden;cursor:pointer;position:relative;
-}
-.inspect .output-card.faved{border:2px solid #ffd700}
-.inspect .output-card img{width:100%;aspect-ratio:1;object-fit:cover;display:block}
-.inspect .output-card .placeholder{
-  aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:#1a0505;font-size:32px;
-}
-.inspect .output-card .play{
-  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  font-size:32px;opacity:.8;pointer-events:none;
-}
-.inspect .output-card .name{
-  padding:4px 6px;font-size:12px;color:var(--text2);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-}
-.inspect .output-cb{
-  position:absolute;top:6px;left:6px;z-index:2;width:18px;height:18px;
-  cursor:pointer;accent-color:var(--accent);
-}
 
 /* ── Overlays ─────────────────────────────────────────────────────────────── */
-.inspect .modal-backdrop{
-  position:fixed;inset:0;z-index:110;background:rgba(0,0,0,.7);
-  display:flex;align-items:center;justify-content:center;padding:16px;
-}
-.inspect .modal{
-  background:var(--surface);border:1px solid #48484a;border-radius:12px;
-  max-width:760px;width:100%;max-height:85vh;display:flex;flex-direction:column;
-}
-.inspect .modal-hdr{display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid #333}
-.inspect .modal-hdr h3{margin:0;font-size:16px;color:var(--text)}
-.inspect .modal-hdr .sub{font-size:12px;color:var(--text2)}
-.inspect .modal-x{margin-left:auto;background:none;border:none;color:var(--text);font-size:22px;cursor:pointer}
-.inspect .modal-body{overflow:auto;padding:8px 12px;flex:1}
-.inspect .modal-ftr{display:flex;gap:8px;padding:12px 16px;border-top:1px solid #333}
-.inspect .modal-ftr .status{margin:0;align-self:center}
-.inspect .mw-row{border:1px solid #333;border-radius:8px;padding:10px;margin-bottom:8px}
-.inspect .mw-top{display:flex;align-items:center;gap:8px}
-.inspect .mw-name{font-size:12px;color:var(--text2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.inspect .mw-badge{font-size:12px;color:#a1309b;border:1px solid #a1309b;border-radius:4px;padding:1px 5px}
-.inspect .mw-maps{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;padding-left:26px}
-.inspect .mw-maps label{font-size:12px;color:var(--text2)}
-.inspect .mw-inp{
-  background:#111;color:var(--text);border:1px solid #48484a;border-radius:6px;
-  padding:5px 8px;font-size:12px;font-family:inherit;
-}
-.inspect .mw-inp.label{width:180px}
-.inspect .mw-inp.sel{max-width:170px}
-.inspect .mw-inp.sel.prompt{max-width:230px}
 
-.inspect .output-overlay{
-  position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.95);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-}
-.inspect .overlay-media{
-  flex:1;display:flex;align-items:center;justify-content:center;
-  width:100%;min-height:0;padding:60px 64px;
-}
-.inspect .overlay-media img,.inspect .overlay-media video{
-  max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;
-}
-.inspect .overlay-info{padding:8px 16px 16px;text-align:center;color:var(--text2);font-size:13px}
-.inspect .overlay-info a{color:var(--accent);margin-left:12px}
-.inspect .overlay-x{
-  position:absolute;top:12px;right:16px;background:none;border:none;color:var(--text);
-  font-size:28px;cursor:pointer;z-index:101;padding:8px;
-}
-.inspect .overlay-nav{
-  position:absolute;top:50%;transform:translateY(-50%);background:rgba(255,255,255,.1);
-  border:none;color:var(--text);font-size:36px;cursor:pointer;border-radius:50%;
-  width:48px;height:48px;z-index:101;
-}
-.inspect .overlay-nav.prev{left:8px}
-.inspect .overlay-nav.next{right:8px}

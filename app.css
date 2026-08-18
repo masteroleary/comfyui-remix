@@ -88,6 +88,18 @@ html.auth-on .shell-settings{right:56px}
   background:rgba(0,0,0,.72);border-radius:4px;
   padding:2px 5px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
 }
+/* Selection box, for hosts that act on a set of tiles (the inspect page's
+   outputs). Top-right is the type badge, so it takes the left corner and the
+   tags shift down out of its way when both are up. */
+.card-cb{
+  position:absolute;top:6px;left:6px;z-index:3;
+  display:flex;align-items:center;justify-content:center;
+  width:22px;height:22px;border-radius:6px;cursor:pointer;
+  background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.45);
+  color:#fff;font-size:13px;line-height:1;
+}
+.card-cb.on{background:var(--accent);border-color:var(--accent)}
+.card-cb ~ .card-tags{top:34px}
 .card-tags{position:absolute;top:4px;left:4px;display:flex;gap:3px;pointer-events:none}
 .card-tag{
   font-size:12px;font-weight:700;padding:2px 5px;border-radius:6px;
@@ -112,6 +124,66 @@ html.auth-on .shell-settings{right:56px}
 }
 .meta-badge svg{width:15px;height:15px;fill:currentColor}
 .card-info.is-remix:hover .meta-badge,.card-info.is-remix:active .meta-badge{background:var(--accent);color:#fff}
+
+/* ── Workflows (the library, as a page) ───────────────────────────────────── */
+.wf-page{padding:16px;max-width:720px;margin:0 auto}
+.wf-head{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.wf-back{
+  display:flex;align-items:center;justify-content:center;
+  width:32px;height:32px;flex:none;border-radius:var(--r-sm);
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text);text-decoration:none;font-size:16px;
+}
+.wf-title{font-size:20px;font-weight:600}
+.wf-add{
+  margin-left:auto;font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+  background:var(--accent);color:#fff;border:none;border-radius:var(--r-sm);padding:8px 14px;
+}
+.wf-add:active,.wf-back:active{opacity:.7}
+.wf-blurb{font-size:12px;color:var(--text3);margin-bottom:14px}
+.wf-list{display:flex;flex-direction:column;gap:8px;min-width:0}
+.wf-item{min-width:0}
+.wf-item-row{display:flex;align-items:stretch;gap:8px;min-width:0}
+/* Same tile language as Home: icon left, label over sub, chevron right. */
+.wf-row{
+  display:flex;align-items:center;gap:12px;flex:1;min-width:0;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  padding:12px 14px;color:var(--text);font:inherit;text-align:left;cursor:pointer;
+}
+.wf-row:active{opacity:.7}
+/* The mapping toggle is its own control, not part of the row: the row opens
+   the workflow, and a nested button inside a button is not a thing. */
+.wf-map-btn{
+  flex:none;width:44px;font:inherit;font-size:16px;cursor:pointer;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  color:var(--text2);
+}
+.wf-map-btn.on{background:var(--surface2);color:var(--text);border-color:var(--surface3)}
+.wf-map-btn:active{opacity:.7}
+/* Node mapping, open under the row it belongs to. */
+.wf-maps{
+  display:flex;flex-direction:column;gap:10px;margin:8px 0 4px;padding:12px 14px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+  min-width:0;overflow:hidden;
+}
+.wf-maps-note{font-size:12px;color:var(--text3);line-height:1.45}
+.wf-map{display:grid;grid-template-columns:58px minmax(0,1fr);align-items:center;gap:10px}
+.wf-map-lbl{font-size:12px;color:var(--text2)}
+.wf-map-sel{
+  width:100%;min-width:0;max-width:100%;
+  font:inherit;font-size:12px;cursor:pointer;
+  background:var(--bg);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--r-sm);padding:7px 8px;
+  text-overflow:ellipsis;
+}
+.wf-maps-foot{display:flex}
+.wf-maps-foot .wf-add{margin-left:auto}
+.wf-add:disabled{opacity:.55;cursor:default}
+.wf-row-icon{font-size:20px;line-height:1;flex:none}
+.wf-row-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.wf-row-label{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wf-row-sub{font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wf-row-go{flex:none;font-size:18px;color:var(--text3)}
 
 /* ── Home tiles ───────────────────────────────────────────────────────────── */
 .home{padding:16px}

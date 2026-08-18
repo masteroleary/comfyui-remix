@@ -139,7 +139,6 @@
 .m-fav{color:var(--amber)}
 .m-del{color:var(--red)}
 .m-remix{color:#fff}
-.m-info{color:#fff}
 
 /* ── Tools flyout ──────────────────────────────────────────────────────────
    .viewer-act-btn sets no colour of its own — its siblings each bring one, so

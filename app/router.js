@@ -25,6 +25,10 @@ export const routes = [
   // bookmark the day mediaDir moves.
   { path: '/view/:root(fav|out)/:path(.*)+', name: 'view', component: () => import('./views/ViewerView.js'), props: true },
   { path: '/inspect', name: 'inspect', component: () => import('./views/InspectView.js') },
+  // The workflow library. A page rather than the Remix dialog's picker alone,
+  // because the library is a property of the install, not of whichever file
+  // happened to be open when you wanted to change it.
+  { path: '/workflows', name: 'workflows', component: () => import('./views/WorkflowsView.js') },
   // Settings is routed rather than modal, so each section is linkable and
   // survives a reload. Both paths load the one view: bare = the section menu.
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.js') },
@@ -98,7 +102,12 @@ export function browseTo(patch, base, roots) {
 }
 
 // Build a viewer location from an ABSOLUTE file path.
+// null when the file is under neither root — including the case where the roots
+// simply are not loaded yet. The alternative is a route with an empty path
+// segment, which /view/:root/:path(.*)+ rejects at push time; callers can say
+// something useful instead of catching a router error.
 export function viewTo(absPath, roots) {
   const { key, rel } = splitRoot(absPath, roots || { fav: '', out: '' });
+  if (!rel) return null;
   return { name: 'view', params: { root: key, path: rel.split('/') } };
 }
