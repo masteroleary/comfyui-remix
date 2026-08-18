@@ -67,6 +67,14 @@ html.auth-on .shell-settings{right:56px}
   width:100%;font-size:12px;color:var(--text2);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
+/* The name strip is a second target on the tile, not a caption: it raises Remix
+   where the thumbnail above it opens the viewer. Only tiles Remix can act on get
+   the affordance, so a folder or a stray file still reads as a plain label. */
+.card-name.is-remix{
+  padding:2px 6px;border-radius:var(--r-sm);
+  background:var(--surface2);color:var(--text);
+}
+.card-name.is-remix:hover,.card-name.is-remix:active{background:var(--accent);color:#fff}
 
 /* ── Home tiles ───────────────────────────────────────────────────────────── */
 .home{padding:16px}

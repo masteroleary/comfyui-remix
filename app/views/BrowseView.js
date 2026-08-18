@@ -69,7 +69,21 @@ export default {
       else router.push(viewTo(item.path, store.roots));
     };
 
-    return { store, open, thumbUrl };
+    // The name strip along the bottom of a tile is a hit area of its own, as it
+    // was before the rewrite folded the whole card into one button: the
+    // thumbnail opens the viewer, the strip under it raises Remix. Anything
+    // Remix cannot act on — folders, audio, stray files — falls through to
+    // open(), so the strip is never a dead click.
+    const canRemix = item => !item.isDir && (item.isImage || item.isVideo);
+    const openRemix = item => {
+      if (store.multiSelect) { toggleSelected(item.path); return; }
+      if (!canRemix(item)) { open(item); return; }
+      // AppShell owns the dialog and imports the run engine eagerly, so raising
+      // it is a store write: nothing to load, and the job outlives this route.
+      store.ui.remix = item;
+    };
+
+    return { store, open, openRemix, canRemix, thumbUrl };
   },
   template: `
     <div class="browse" :class="{ 'blur-on': store.blurOn }">
@@ -84,7 +98,9 @@ export default {
           <img v-else-if="it.thumb || it.isImage" class="card-thumb" loading="lazy"
                :src="thumbUrl(it.path, it.thumbV || it.v)" :alt="it.name">
           <span class="card-icon" v-else>{{ it.isVideo ? '🎬' : it.isAudio ? '🎵' : '📄' }}</span>
-          <span class="card-name">{{ it.name }}</span>
+          <span class="card-name" :class="{ 'is-remix': canRemix(it) }"
+                :title="canRemix(it) ? 'Remix ' + it.name : it.name"
+                @click.stop="openRemix(it)">{{ it.name }}</span>
         </button>
       </div>
     </div>
