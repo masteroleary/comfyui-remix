@@ -18,7 +18,7 @@ node server.js 8080 /path/to/media # override port and media root
 
 - **server.js** — Node.js HTTP server (no external dependencies). Serves the front end, exposes REST APIs for listing/favoriting/deleting media, and proxies ComfyUI (HTTP + WebSocket).
 - **index.html** — a small shell only: the stylesheet/script tags and the mount point. The application lives in `app/`.
-- **app/** — the SPA, as native ES modules with no build step. `router.js` (routes), `store.js` (shared reactive state), `views/` (one per route), `components/` (the chrome and the dialogs). Vue 3 is the global build, vendored under `vendor/`.
+- **app/** — the SPA, as native ES modules with no build step. `router.js` (routes), `store.js` (shared reactive state), `views/` (one per route), `components/` (the chrome, the dialogs and the shared pieces below). Vue 3 is the global build, vendored under `vendor/`.
 - **config.json** — Runtime config (ports, paths, API keys). Gitignored; create it by copying `config.example.json`.
 - **Media/** — Default media root browsed by the app. Gitignored.
 
@@ -29,11 +29,37 @@ allowlisted by shape (`.js`/`.css`, one directory deep).
 ### Routes
 
 `/` home · `/browse/:root/:path*` grid · `/view/:root/:path+` viewer ·
-`/inspect` metadata · `/settings` and `/settings/:tab` (config | privacy | security).
+`/inspect` a file **or** a workflow · `/workflows` the library ·
+`/settings` and `/settings/:tab` (config | privacy | security).
+
+`/inspect` takes either `?path=…` (a file) or `?wf=<name>` (a workflow with no
+file behind it, opened from the Workflows page). With no file it drops the
+Preview tab and the metadata half and locks the workflow dropdown — the URL says
+which workflow it is, so changing it there would leave the two disagreeing.
 
 Settings is **routed pages, not a modal** — each section is linkable and survives a
 reload. `SettingsPanel.js` renders either shape: as a dialog it keeps the overlay
 and tab strip, and with `page`/`only` props it drops both and renders one section.
+
+### Shared components
+
+The dialog and the inspect page are two hosts of the same parts, not two
+implementations. Anything that behaves differently in one of them is a bug, and
+usually the same bug: something the host provided instead of the component.
+
+- **`components/WorkflowFields.js`** — the form a workflow declares, built from
+  `/api/workflow-field-config`: the controls, the node grouping, the LoRA
+  columns, the family filter, the preset dropdown, the hidden-field list. It
+  owns the media picker and the LoRA library it needs (that is why an image
+  field has 🖼 Browse wherever it is mounted), and it owns no state: `cfg.fields`
+  are reactive objects the controls write straight into, and the host reads them
+  back when it builds a run. The host contributes only its own extras, through
+  the slot — the replacement rules, in both cases.
+- **`components/MediaBrowser.js`** — the gallery a media field opens.
+- **`components/MediaTile.js`** — one card: square thumbnail flush to the tile,
+  info bar under it. The thumbnail opens the viewer, the bar raises Remix. Used
+  by the browse grid and by the run outputs in both hosts, so a file you just
+  generated opens exactly where any other file opens.
 
 ### Jobs
 
@@ -43,6 +69,13 @@ leader-elected ComfyUI socket and the reconciler, and it runs because `AppShell`
 imports it eagerly. **`components/JobsDialog.js` is a view only** and owns no
 state. The progress hairline and the `⚡ N` badge live in `AppShell`, since a job
 outlives both the dialog that started it and the route it started from.
+
+**Everything that runs goes through `launchJob`** — the inspect page included.
+It used to run its own socket, uploader and output poller inside a component,
+which meant a run died whenever the page unmounted: opening one of its own
+outputs in the viewer was enough. The prompt-replacement rules are exported from
+the same module for the same reason — two copies meant a rule typed on one
+surface did nothing to a run started from it.
 
 ## API Endpoints
 
@@ -54,8 +87,9 @@ outlives both the dialog that started it and the route it started from.
 | GET | `/api/metadata` | Extract workflow metadata from PNG/video files |
 | GET | `/file/{path}` | Serve media file with range support |
 | GET | `/thumb/{path}` | Serve video thumbnail |
-| GET | `/api/workflow-field-config` | The controls the Remix dialog builds for a workflow |
-| POST | `/api/workflows/manage` | Replace the set of workflows shown in the dropdown |
+| GET/POST | `/api/workflow-field-config` | Read a workflow's form (merged with saved edits) / save those edits |
+| GET | `/api/workflows/all` | Every workflow on disk, with label, enabled flag and mapping |
+| POST | `/api/workflows/manage` | Replace the set of workflows in the library |
 | POST | `/api/workflows/save` | Write an image's embedded graph out as a new workflow |
 | POST | `/api/workflows/update` | Overwrite a workflow's own `.json` with the fields on screen |
 | GET/POST | `/api/settings` | Read (keys masked) / merge into config.json and hot-reload |
@@ -65,6 +99,29 @@ value can only ever land where a run would have put it; the rest of the graph is
 left alone rather than re-serialised. It refuses `__inherit__` (no file) and
 `@sc:` shortcuts (they live in the store, and resolving one would rewrite its
 parent), and drops a one-time `.bak` beside the file before the first overwrite.
+
+### The workflow form, and the three ways to make a change stick
+
+Detection builds the form; nothing else does. There are no "classic" controls any
+more, and `/api/workflow-config` with its prompt/steps/seed **node mapping**
+(`resolvePromptNode` and friends, `store.mappings`) is now dead weight — nothing
+in the app calls it. Stored mappings are still round-tripped by
+`/api/workflows/manage` so an old install is not silently retargeted.
+
+What a change does depends on which control saved it:
+
+| Control | Writes | Where |
+|---|---|---|
+| ✏️ **Update workflow** (dialog + inspect) | the **values** | the workflow's own `.json` — ComfyUI sees them too |
+| **Save field setup** (inspect) | which fields **show**, and their labels | `fieldConfigs[name].edits` in the app store |
+| **⚙ roles** (Workflows page) | which field is prompt / seed / steps / cfg | the same `edits`, as a `kind` override |
+
+Anything typed and not saved lives until the visit ends: a trip to the viewer to
+look at an output is a round trip and keeps it, while Home, Back or another
+workflow starts again from the file. `buildFieldConfig` merges the saved edits
+over every detection run and returns them as `savedEdits`, because the POST
+replaces the whole map — a client that sent only its own keys would drop the
+other surface's.
 
 ## Config
 
