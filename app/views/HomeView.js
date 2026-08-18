@@ -75,9 +75,10 @@ export default {
     <div class="home">
       <div v-if="loading" class="loading"><div class="spinner"></div> Loading…</div>
       <template v-else>
-        <!-- The logo art is dark-on-white, so it cannot sit directly on the
-             page: it carries its own light ground and reads as a card. -->
-        <img class="home-logo" src="/logo-home.jpg" alt="ComfyUI-Remix" width="640" height="346">
+        <!-- The art carries its own near-black ground, so it sits on the page
+             rather than in a card. Intrinsic size is the file's own 960×518 —
+             it displays at 320 CSS px, so that is 3x for phone screens. -->
+        <img class="home-logo" src="/logo-home.webp" alt="ComfyUI-Remix" width="960" height="518">
         <div class="home-tiles">
           <template v-for="t in tiles" :key="t.key">
             <router-link v-if="t.to" :to="t.to" class="home-tile">

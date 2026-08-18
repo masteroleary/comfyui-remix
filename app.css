@@ -115,10 +115,10 @@ html.auth-on .shell-settings{right:56px}
 
 /* ── Home tiles ───────────────────────────────────────────────────────────── */
 .home{padding:16px}
-/* Dark text on a white ground, so it is framed as a card rather than laid on
-   the page — a bare white rectangle on #0d0d0d reads as a failed load. The
-   intrinsic width/height are on the tag so the tiles below do not jump when it
-   finishes loading. */
+/* The art is light-on-black and its ground is within a shade of the page's own,
+   so it needs no card to sit in — the rounded corners are all that separates it
+   from #0d0d0d. The intrinsic width/height are on the tag so the tiles below do
+   not jump when it finishes loading. */
 .home-logo{
   display:block;width:100%;max-width:320px;height:auto;
   margin:0 auto 18px;border-radius:var(--r);
