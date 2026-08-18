@@ -54,27 +54,64 @@ html.auth-on .shell-settings{right:56px}
   display:grid;gap:10px;padding:12px;
   grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
 }
+/* The tile is a square thumbnail flush to its own edges with an info bar under
+   it — the shape the pre-SPA card had. The card carries no padding for exactly
+   that reason: the thumb runs edge to edge and the bar below it runs the full
+   width, so the bar reads as a second surface rather than a caption floating
+   inside a frame. */
 .card{
-  display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;
+  display:flex;flex-direction:column;
   background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
-  padding:8px;aspect-ratio:1;overflow:hidden;cursor:pointer;color:var(--text);
-  font:inherit;text-align:center;
+  padding:0;overflow:hidden;cursor:pointer;color:var(--text);
+  font:inherit;text-align:left;
 }
 .card:active{opacity:.7}
-.card-thumb{flex:1;min-height:0;width:100%;object-fit:cover;border-radius:var(--r-sm)}
-.card-icon{flex:1;display:flex;align-items:center;justify-content:center;font-size:34px}
+.card-thumb{
+  position:relative;width:100%;aspect-ratio:1;background:var(--surface2);
+  display:flex;align-items:center;justify-content:center;overflow:hidden;
+}
+.card-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.card-icon{font-size:34px;line-height:1}
+
+/* Thumb overlays. */
+.play-overlay{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.25);pointer-events:none;
+}
+.play-circle{
+  width:42px;height:42px;background:rgba(0,0,0,.65);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+}
+.play-circle svg{width:18px;height:18px;fill:#fff;margin-left:3px}
+.ext-badge{
+  position:absolute;top:5px;right:5px;
+  background:rgba(0,0,0,.72);border-radius:4px;
+  padding:2px 5px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+}
+.card-tags{position:absolute;top:4px;left:4px;display:flex;gap:3px;pointer-events:none}
+.card-tag{
+  font-size:12px;font-weight:700;padding:2px 5px;border-radius:6px;
+  background:rgba(0,0,0,.65);color:#c8c8cd;letter-spacing:.3px;
+}
+.card-tag.nsfw{background:rgba(120,20,20,.85);color:#ffd7d7}
+
+/* The info bar is a target, not a label: it raises Remix where the thumbnail
+   above it opens the viewer. Only tiles Remix can act on carry the badge and
+   the pointer — a folder or a stray file still reads as a plain caption. */
+.card-info{display:flex;align-items:center;gap:6px;padding:5px 8px 7px;min-width:0}
+.card-info.is-remix{cursor:pointer}
+.card-info-text{flex:1;min-width:0}
 .card-name{
-  width:100%;font-size:12px;color:var(--text2);
+  display:block;font-size:12px;color:var(--text);line-height:1.35;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
-/* The name strip is a second target on the tile, not a caption: it raises Remix
-   where the thumbnail above it opens the viewer. Only tiles Remix can act on get
-   the affordance, so a folder or a stray file still reads as a plain label. */
-.card-name.is-remix{
-  padding:2px 6px;border-radius:var(--r-sm);
-  background:var(--surface2);color:var(--text);
+.card-meta{display:block;font-size:12px;color:var(--text3);margin-top:1px}
+.meta-badge{
+  flex-shrink:0;display:flex;align-items:center;
+  background:var(--surface2);border-radius:6px;padding:4px 6px;color:var(--accent);
 }
-.card-name.is-remix:hover,.card-name.is-remix:active{background:var(--accent);color:#fff}
+.meta-badge svg{width:15px;height:15px;fill:currentColor}
+.card-info.is-remix:hover .meta-badge,.card-info.is-remix:active .meta-badge{background:var(--accent);color:#fff}
 
 /* ── Home tiles ───────────────────────────────────────────────────────────── */
 .home{padding:16px}
@@ -113,5 +150,5 @@ button.home-tile{font:inherit;text-align:left;cursor:pointer}
 
 /* Blur is a container class, not a per-image style: the grid re-renders on every
    listing and a per-node style would have to be reapplied each time. */
-.blur-on .card-thumb{filter:blur(20px)}
+.blur-on .card-thumb img{filter:blur(20px);transform:scale(1.1)}
 .card.is-selected{outline:2px solid var(--accent);outline-offset:-2px}
