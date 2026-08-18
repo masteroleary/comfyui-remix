@@ -980,7 +980,7 @@ function generate(file) {
   return cfg;
 }
 
-if (require.main !== module) { module.exports = { generate, detectGraph, detectApi }; return; }
+if (require.main !== module) { module.exports = { generate, detectGraph, detectApi, widgetIndex }; return; }
 
 const argv = process.argv.slice(2);
 const full = argv.includes('--full');

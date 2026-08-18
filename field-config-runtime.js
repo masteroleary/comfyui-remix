@@ -22,6 +22,7 @@ module.exports = function createFieldConfigRuntime(deps) {
     catch (e) { return { version: 1, workflow: wfName, format: 'error', fields: [], zones: [], presets: [], skipped: [], error: e.message }; }
     cfg.workflowMtime = mtimeMs || 0;
     const saved = (loadStore().fieldConfigs || {})[wfName];
+    cfg.savedEdits = (saved && saved.edits) || {};
     if (saved) {
       if (saved.edits) for (const f of cfg.fields) {
         const e = saved.edits[f.id];
@@ -29,6 +30,11 @@ module.exports = function createFieldConfigRuntime(deps) {
         if (e.enabled !== undefined) f.enabled = e.enabled;
         if (e.label !== undefined) f.label = e.label;
         if (e.value !== undefined) f.value = e.value;
+        // Which role a field plays, when the detector called it something else.
+        // Everything downstream keys on kind, so enabling the field is not
+        // enough on its own: the seed pin, the prompt the job record keeps and
+        // the seed branch of applyFieldConfigOverrides all read it.
+        if (e.kind !== undefined) f.kind = e.kind;
         f.userEdited = true;
       }
       if (Array.isArray(saved.manual)) for (const mf of saved.manual) {
@@ -151,7 +157,39 @@ module.exports = function createFieldConfigRuntime(deps) {
               node.widgets_values.splice(lastLora >= 0 ? lastLora + 1 : node.widgets_values.length, 0, obj);
             }
           }
-        } else { warnings.push(`lora-stack apply not yet supported (${fid})`); }
+        } else {
+          // A lora stack (easy loraStack, CR LoRA Stack). The detector already
+          // resolved which widget each row writes — `strengthWidget`, plus
+          // `onWidget` where the node has a per-row switch — so write through
+          // those names instead of guessing offsets. The incoming rows carry
+          // only slot/on/strength, so the names come off the detected row with
+          // the same slot.
+          const wi = generator && generator.widgetIndex;
+          const wv = node.widgets_values;
+          const detected = Array.isArray(f.value) ? f.value : [];
+          const bySlot = new Map(detected.map(d => [String(d.slot), d]));
+          const setW = (name, val) => {
+            if (!name || !wi) return false;
+            const i = wi(node, name);
+            if (typeof i === 'string') { wv[i] = val; return true; }        // VHS-style named object
+            if (typeof i !== 'number' || i >= wv.length) return false;
+            wv[i] = val;
+            return true;
+          };
+          let applied = 0;
+          for (const r of rows || []) {
+            const d = bySlot.get(String(r.slot)) || {};
+            if (r.strength != null && setW(r.strengthWidget || d.strengthWidget, r.strength)) applied++;
+            const onName = r.onWidget || d.onWidget;
+            if (onName) { if (setW(onName, r.on ? 'On' : 'Off')) applied++; }
+            // easy loraStack has no per-row switch: 'None' is how that node
+            // disables a slot. It is written into this run's copy of the graph,
+            // never the workflow file, so the name comes back next run.
+            else if (r.on === false) { if (setW(`lora_${r.slot}_name`, 'None')) applied++; }
+            else if (r.lora && r.lora !== d.lora) { if (setW(`lora_${r.slot}_name`, r.lora)) applied++; }
+          }
+          if (!applied) warnings.push(`lora-stack: nothing applied (${fid})`);
+        }
         continue;
       }
 
