@@ -1497,9 +1497,10 @@ function detectPresetGroups(wf) {
 }
 
 // ── App workflow registry ──────────────────────────────────────────────
-// Which install-dir workflows are exposed in the app, plus per-workflow node
-// mappings (which node is the prompt/steps/seed) so we never have to rename or
-// mutate the original .json. Convention-based auto-detect is the fallback.
+// Which install-dir workflows the app offers, their labels, their field-config
+// edits and their shortcuts. `mappings` (which node is the prompt/steps/seed)
+// is a leftover of the classic controls: nothing reads it now, and it is kept
+// in the shape only so an older build finds what it left.
 let WORKFLOWS_DIR = path.join(COMFY_DIR, 'user', 'default', 'workflows');
 const WF_STORE_PATH = path.join(__dirname, 'app-workflows.json');
 
@@ -1665,144 +1666,6 @@ function resolveWfName(name) {
 const UI_ONLY_TYPES = new Set(['Reroute', 'PrimitiveNode', 'Note', 'MarkdownNote', 'Label (rgthree)', 'Bookmark (rgthree)']);
 function nodeById(wf, id) { return (wf.nodes || []).find(n => String(n.id) === String(id)); }
 
-function resolvePromptNode(wf, mapping) {
-  if (mapping && mapping.promptNodeId != null) { const n = nodeById(wf, mapping.promptNodeId); if (n) return n; }
-  for (const n of wf.nodes || []) {
-    const t = (n.title || '').toUpperCase();
-    if (t.includes('MAIN') && t.includes('PROMPT')) return n;
-  }
-  // Best-effort guess: a titled "Positive Prompt" text node outside detailer groups,
-  // else the longest string-bearing node.
-  let best = null, bestLen = -1;
-  for (const n of wf.nodes || []) {
-    if (UI_ONLY_TYPES.has(n.type)) continue;
-    const wv = n.widgets_values;
-    const txt = Array.isArray(wv) && typeof wv[0] === 'string' ? wv[0] : '';
-    if (!txt) continue;
-    const t = (n.title || '').toUpperCase();
-    const score = (t.includes('POS') && t.includes('PROMPT') ? 100000 : 0) + txt.length;
-    if (score > bestLen) { bestLen = score; best = n; }
-  }
-  return best;
-}
-function resolveStepsNode(wf, mapping) {
-  if (mapping && mapping.stepsNodeId != null) { const n = nodeById(wf, mapping.stepsNodeId); if (n) return n; }
-  return (wf.nodes || []).find(n => (n.title || '').toUpperCase() === 'STEPS' && n.type === 'mxSlider') || null;
-}
-// Wan-style dual-sampler workflows: two active KSamplerAdvanced nodes where the
-// high-noise pass starts at step 0 and hands off to the low-noise pass.
-// widgets_values: [add_noise, noise_seed, control, steps, cfg, sampler, scheduler,
-//                  start_at_step, end_at_step, return_with_leftover_noise]
-function findHighLowSamplers(wf) {
-  const ks = (wf.nodes || []).filter(n => n.type === 'KSamplerAdvanced'
-    && Array.isArray(n.widgets_values) && n.widgets_values.length >= 9
-    && n.mode !== 2 && n.mode !== 4);
-  if (ks.length !== 2) return null;
-  const high = ks.find(n => Number(n.widgets_values[7]) === 0);
-  const low = ks.find(n => Number(n.widgets_values[7]) > 0);
-  return (high && low) ? { high, low } : null;
-}
-
-function resolveSeedNode(wf, mapping) {
-  if (mapping && mapping.seedNodeId != null) { const n = nodeById(wf, mapping.seedNodeId); if (n) return n; }
-  return (wf.nodes || []).find(n => n.type === 'Seed (rgthree)' && (n.mode || 0) === 0) || null;
-}
-
-// Read the enabled LoRA slots from a Power Lora Loader node's widgets_values.
-function extractLoras(node) {
-  const out = [];
-  const wv = (node && node.widgets_values) || [];
-  for (let i = 0; i < wv.length; i++) {
-    const v = wv[i];
-    if (v && typeof v === 'object' && v.lora) out.push({ slot: i, on: !!v.on, strength: v.strength || 1, lora: v.lora });
-  }
-  return out;
-}
-
-// Write on/strength overrides back onto a loader node by slot.
-function applyLoraOverrides(node, ovs) {
-  if (!node || !Array.isArray(ovs)) return;
-  const wv = node.widgets_values || [];
-  for (const o of ovs) {
-    if (o.slot != null && wv[o.slot] && typeof wv[o.slot] === 'object' && wv[o.slot].lora) {
-      if (o.on !== undefined) wv[o.slot].on = o.on;
-      if (o.strength !== undefined) wv[o.slot].strength = o.strength;
-    }
-  }
-}
-
-// Wan-style dual-sampler workflows carry two Power Lora Loaders — one per
-// (high/low)-noise pass. Map each to its pass by tracing the sampler's model
-// input back through the graph to a loader. Returns { high, low } or null.
-function findHighLowLoraLoaders(wf) {
-  const hl = findHighLowSamplers(wf);
-  if (!hl) return null;
-  const loaders = (wf.nodes || []).filter(n => (n.type || '').includes('Power Lora Loader') && n.mode !== 2 && n.mode !== 4);
-  if (loaders.length !== 2) return null;
-  const linkById = {};
-  for (const l of (wf.links || [])) if (Array.isArray(l)) linkById[l[0]] = l; // [id, from, fromSlot, to, toSlot, type]
-  const byId = {};
-  for (const n of (wf.nodes || [])) byId[String(n.id)] = n;
-  const loaderFeeding = (nodeId, depth) => {
-    if (depth > 16) return null;
-    const node = byId[String(nodeId)];
-    if (!node) return null;
-    if ((node.type || '').includes('Power Lora Loader')) return node;
-    const inp = (node.inputs || []).find(i => /model/i.test(i.name || ''));
-    if (!inp || inp.link == null) return null;
-    const link = linkById[inp.link];
-    return link ? loaderFeeding(link[1], depth + 1) : null;
-  };
-  const high = loaderFeeding(hl.high.id, 0), low = loaderFeeding(hl.low.id, 0);
-  if (!high || !low || String(high.id) === String(low.id)) return null;
-  return { high, low };
-}
-
-// CFG: an mxSlider titled "CFG" by convention, else the active KSampler-family
-// nodes (cfg widget index 3 on KSampler, 4 on KSamplerAdvanced). When multiple
-// samplers are active they must agree on the value — otherwise the workflow
-// intends different CFGs per pass and we don't expose a single control that
-// would clobber that. Returns { get, set } or null.
-function resolveCfg(wf) {
-  const slider = (wf.nodes || []).find(n => (n.title || '').toUpperCase() === 'CFG'
-    && (n.type === 'mxSlider' || n.type === 'mxSliderF') && Array.isArray(n.widgets_values));
-  if (slider) {
-    const wv = slider.widgets_values;
-    return {
-      get: () => typeof wv[0] === 'number' ? wv[0] : (typeof wv[1] === 'number' ? wv[1] : null),
-      set: (v) => { if (typeof wv[0] === 'number') wv[0] = v; if (typeof wv[1] === 'number') wv[1] = v; },
-    };
-  }
-  const cfgIdx = n => n.type === 'KSamplerAdvanced' ? 4 : 3;
-  const samplers = (wf.nodes || []).filter(n =>
-    (n.type === 'KSampler' || n.type === 'KSamplerAdvanced')
-    && n.mode !== 2 && n.mode !== 4
-    && Array.isArray(n.widgets_values) && typeof n.widgets_values[cfgIdx(n)] === 'number');
-  if (!samplers.length) return null;
-  const first = samplers[0].widgets_values[cfgIdx(samplers[0])];
-  if (!samplers.every(n => n.widgets_values[cfgIdx(n)] === first)) return null;
-  return {
-    get: () => samplers[0].widgets_values[cfgIdx(samplers[0])],
-    set: (v) => { for (const n of samplers) n.widgets_values[cfgIdx(n)] = v; },
-  };
-}
-
-// Candidate nodes for the mapping editor dropdowns.
-function workflowCandidates(wf) {
-  const strNodes = [], intNodes = [], seedNodes = [];
-  for (const n of wf.nodes || []) {
-    if (UI_ONLY_TYPES.has(n.type)) continue;
-    const wv = Array.isArray(n.widgets_values) ? n.widgets_values : [];
-    const snippet = (s) => String(s).replace(/\s+/g, ' ').slice(0, 60);
-    const base = { id: n.id, type: n.type, title: n.title || '' };
-    if (typeof wv[0] === 'string' && wv[0].length > 0) strNodes.push({ ...base, sample: snippet(wv[0]) });
-    if (typeof wv[0] === 'number' && Number.isInteger(wv[0])) intNodes.push({ ...base, sample: String(wv[0]) });
-    if (n.type === 'Seed (rgthree)' || /seed/i.test(n.title || '')) seedNodes.push({ ...base, sample: String(wv[0]) });
-  }
-  return { prompt: strNodes, steps: intNodes, seed: seedNodes };
-}
-
-// Cross-drive move: rename if same drive, copy+delete otherwise
 function moveFile(src, dest, cb) {
   fs.rename(src, dest, (err) => {
     if (!err) return cb(null);
@@ -3343,22 +3206,13 @@ runTests();
   if (pn === '/api/workflows/all' && req.method === 'GET') {
     const store = loadWfStore();
     const enabledSet = new Set(store.enabled);
-    const all = listAllWorkflows().map(n => {
-      const item = { name: n, label: store.labels[n] || defaultLabel(n), enabled: enabledSet.has(n), mapping: store.mappings[n] || null };
-      // Only compute candidates/auto-detected guesses for enabled ones (parse cost).
-      if (item.enabled) {
-        try {
-          const wf = JSON.parse(fs.readFileSync(path.join(WORKFLOWS_DIR, n), 'utf8'));
-          item.candidates = workflowCandidates(wf);
-          const pn2 = resolvePromptNode(wf, store.mappings[n]);
-          const sn = resolveStepsNode(wf, store.mappings[n]);
-          const sd = resolveSeedNode(wf, store.mappings[n]);
-          item.detected = { promptNodeId: pn2 ? pn2.id : null, stepsNodeId: sn ? sn.id : null, seedNodeId: sd ? sd.id : null };
-          item.hasPresets = detectPresetGroups(wf).length > 0;
-        } catch (e) { item.error = e.message; }
-      }
-      return item;
-    });
+    // Name, label and whether it is in the library. It used to parse every
+    // enabled workflow here as well, to offer prompt/steps/seed node candidates
+    // to a mapping UI that no longer exists — a graph parse per workflow on every
+    // listing, for an answer nobody read.
+    const all = listAllWorkflows().map(n => ({
+      name: n, label: store.labels[n] || defaultLabel(n), enabled: enabledSet.has(n),
+    }));
     jsonRes(res, all);
     return;
   }
@@ -3485,29 +3339,7 @@ runTests();
     return;
   }
 
-  // API: Mapping candidates + auto-detected guesses for a single workflow
-  if (pn === '/api/workflow-nodes' && req.method === 'GET') {
-    const wfName = url.searchParams.get('name');
-    if (!wfName) { jsonRes(res, { error: 'Missing name' }, 400); return; }
-    const wfPath = path.join(WORKFLOWS_DIR, wfName);
-    if (!path.resolve(wfPath).startsWith(path.resolve(WORKFLOWS_DIR))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
-    fs.readFile(wfPath, 'utf8', (err, raw) => {
-      if (err) { jsonRes(res, { error: err.message }, 500); return; }
-      try {
-        const wf = JSON.parse(raw);
-        const mapping = (loadWfStore().mappings || {})[wfName] || null;
-        const pn2 = resolvePromptNode(wf, mapping), sn = resolveStepsNode(wf, mapping), sd = resolveSeedNode(wf, mapping);
-        jsonRes(res, {
-          candidates: workflowCandidates(wf),
-          detected: { promptNodeId: pn2 ? pn2.id : null, stepsNodeId: sn ? sn.id : null, seedNodeId: sd ? sd.id : null },
-          hasPresets: detectPresetGroups(wf).length > 0,
-        });
-      } catch (e) { jsonRes(res, { error: 'Parse error: ' + e.message }, 500); }
-    });
-    return;
-  }
-
-  // API: Persist the allowlist + labels + node mappings
+  // API: Persist the library and its labels
   if (pn === '/api/workflows/manage' && req.method === 'POST') {
     let bodyStr = '';
     req.on('data', c => bodyStr += c);
@@ -3518,7 +3350,9 @@ runTests();
       const valid = new Set(listAllWorkflows());
       if (Array.isArray(body.enabled)) store.enabled = body.enabled.filter(n => valid.has(n));
       if (body.labels && typeof body.labels === 'object') store.labels = body.labels;
-      if (body.mappings && typeof body.mappings === 'object') store.mappings = body.mappings;
+      // body.mappings is accepted and ignored: the classic controls it steered
+      // are gone. An existing one is left in the store rather than deleted, so
+      // going back to an older build finds what it left.
       const ok = saveWfStore(store);
       jsonRes(res, ok ? { ok: true, enabled: store.enabled } : { error: 'Save failed' }, ok ? 200 : 500);
     });
@@ -3731,80 +3565,6 @@ runTests();
   }
 
   // API: Get editable config (MAIN PROMPT, loras) from an APP workflow
-  if (pn === '/api/workflow-config' && req.method === 'GET') {
-    const wfName = url.searchParams.get('name');
-    if (!wfName) { jsonRes(res, { error: 'Missing name' }, 400); return; }
-    const wfPath = path.join(COMFY_DIR, 'user', 'default', 'workflows', wfName);
-    if (!path.resolve(wfPath).startsWith(path.resolve(path.join(COMFY_DIR, 'user', 'default', 'workflows')))) {
-      jsonRes(res, { error: 'Access denied' }, 403); return;
-    }
-    const wfStat = fs.statSync(wfPath, { throwIfNoEntry: false });
-    fs.readFile(wfPath, 'utf8', async (err, raw) => {
-      if (err) { jsonRes(res, { error: err.message }, 500); return; }
-      try {
-        const wf = JSON.parse(raw);
-        const mapping = (loadWfStore().mappings || {})[wfName] || null;
-        const config = { prompt: '', loras: [], frames: null, seed: null, steps: null, cfg: null, presets: [], mtime: wfStat ? wfStat.mtimeMs : 0 };
-
-        // Prompt / steps / seed via mapping-or-convention resolvers
-        const promptNode = resolvePromptNode(wf, mapping);
-        if (promptNode) { const wv = promptNode.widgets_values || []; config.prompt = typeof wv[0] === 'string' ? wv[0] : ''; }
-        const stepsNode = resolveStepsNode(wf, mapping);
-        if (stepsNode) { const wv = stepsNode.widgets_values || []; config.steps = typeof wv[0] === 'number' ? wv[0] : (typeof wv[1] === 'number' ? wv[1] : null); }
-        const seedNode = resolveSeedNode(wf, mapping);
-        if (seedNode) { const wv = seedNode.widgets_values || []; config.seed = typeof wv[0] === 'number' ? wv[0] : -1; }
-
-        // Dual high/low sampler split (Wan video): report per-pass step counts
-        const hl = findHighLowSamplers(wf);
-        if (hl) {
-          const total = Number(hl.high.widgets_values[3]) || 0;
-          const high = Number(hl.high.widgets_values[8]) || 0;
-          config.highLowSteps = { high, low: Math.max(0, total - high) };
-        }
-
-        // CFG: read from the converted prompt — exact w.r.t. muted/pruned
-        // branches and slider/config-node indirection. Only exposed when every
-        // executing sampler agrees on the value. The graph heuristic is just a
-        // degraded-mode fallback (ComfyUI down = no widget mapping).
-        let converted = null;
-        try { converted = await workflowToPrompt(JSON.parse(JSON.stringify(wf))); } catch {}
-        const sampCfgs = converted ? Object.values(converted)
-          .filter(n => (n.class_type || '').startsWith('KSampler') && typeof (n.inputs || {}).cfg === 'number')
-          .map(n => n.inputs.cfg) : [];
-        if (sampCfgs.length) {
-          if (sampCfgs.every(v => v === sampCfgs[0])) config.cfg = sampCfgs[0];
-        } else {
-          const cfgCtl = resolveCfg(wf);
-          if (cfgCtl) config.cfg = cfgCtl.get();
-        }
-
-        // Frames slider (mxSlider titled "Frames") — unchanged convention
-        for (const node of wf.nodes || []) {
-          if ((node.title || '').toUpperCase() === 'FRAMES' && node.type === 'mxSlider') {
-            const wv = node.widgets_values || [];
-            config.frames = typeof wv[0] === 'number' ? wv[0] : (typeof wv[1] === 'number' ? wv[1] : null);
-          }
-        }
-        // Style/quality preset groups (return title + on state; drop internal memberIds)
-        config.presets = detectPresetGroups(wf).map(p => ({ title: p.title, on: p.on }));
-        // LoRAs: dual high/low lists for Wan dual-sampler workflows, else a single list.
-        const hlLoaders = findHighLowLoraLoaders(wf);
-        if (hlLoaders) {
-          config.lorasHigh = extractLoras(hlLoaders.high);
-          config.lorasLow = extractLoras(hlLoaders.low);
-        } else {
-          const loraNodes = (wf.nodes || []).filter(n => (n.type || '').includes('Power Lora Loader'));
-          if (loraNodes.length > 0) config.loras = extractLoras(loraNodes[0]);
-        }
-        jsonRes(res, config);
-      } catch (e) {
-        jsonRes(res, { error: 'Parse error: ' + e.message }, 500);
-      }
-    });
-    return;
-  }
-
-  // API: Load an APP workflow, apply overrides, convert to API/prompt format
   if (pn === '/api/workflow-prompt' && (req.method === 'GET' || req.method === 'POST')) {
     // A shortcut runs its parent's graph; the field values it captured reach us
     // in the body, since the dialog has already opened on them.
@@ -3828,8 +3588,6 @@ runTests();
         const st = fs.statSync(wfPath, { throwIfNoEntry: false }); mtime = st ? st.mtimeMs : 0;
       } else { jsonRes(res, { error: 'Missing name or workflow' }, 400); return; }
       try {
-          const mapping = (loadWfStore().mappings || {})[effName] || null;
-
           // New-style generic field overrides: { fieldValues: {<id>: value} }.
           // Applied to the raw graph before conversion; coexists with the legacy
           // keys below (the field panel sends only fieldValues, so those are skipped).
@@ -3839,111 +3597,12 @@ runTests();
             fieldWarnings = applyFieldConfigOverrides(wf, cfg, overrides.fieldValues).warnings;
           }
 
-          // Apply prompt override (mapped node, or MAIN PROMPT / best-guess)
-          if (overrides.prompt !== undefined) {
-            const promptNode = resolvePromptNode(wf, mapping);
-            if (promptNode && promptNode.widgets_values) promptNode.widgets_values[0] = overrides.prompt;
-          }
-
-          // Apply lora overrides to all Power Lora Loader nodes
-          if (overrides.lorasHigh || overrides.lorasLow) {
-            // Dual high/low lists → apply each to its mapped loader node.
-            const hlLoaders = findHighLowLoraLoaders(wf);
-            if (hlLoaders) {
-              applyLoraOverrides(hlLoaders.high, overrides.lorasHigh);
-              applyLoraOverrides(hlLoaders.low, overrides.lorasLow);
-            }
-          } else if (overrides.loras && Array.isArray(overrides.loras)) {
-            const loraNodes = (wf.nodes || []).filter(n => (n.type || '').includes('Power Lora Loader'));
-            for (const node of loraNodes) applyLoraOverrides(node, overrides.loras);
-          }
-
-          // Apply frames override to mxSlider "Frames" node
-          if (overrides.frames !== undefined && overrides.frames !== null) {
-            for (const node of wf.nodes || []) {
-              const title = (node.title || '').toUpperCase();
-              if (title === 'FRAMES' && node.type === 'mxSlider') {
-                const wv = node.widgets_values || [];
-                const frameVal = parseInt(overrides.frames);
-                if (!isNaN(frameVal)) {
-                  // mxSlider has Xi and Xf - set both
-                  if (typeof wv[0] === 'number') wv[0] = frameVal;
-                  if (typeof wv[1] === 'number') wv[1] = frameVal;
-                }
-              }
-            }
-          }
-
-          // Apply steps override (mapped node, or mxSlider "Steps"). Sets wv[0]/wv[1].
-          if (overrides.steps !== undefined && overrides.steps !== null) {
-            const stepVal = parseInt(overrides.steps);
-            const stepsNode = resolveStepsNode(wf, mapping);
-            if (!isNaN(stepVal) && stepsNode && stepsNode.widgets_values) {
-              const wv = stepsNode.widgets_values;
-              if (typeof wv[0] === 'number') wv[0] = stepVal;
-              if (typeof wv[1] === 'number') wv[1] = stepVal;
-            }
-          }
-
-          // High/low sampler split override — the sum becomes total steps on both
-          // passes; the high pass covers [0, high), the low pass takes over from there.
-          if (overrides.highSteps != null && overrides.lowSteps != null) {
-            const hs = parseInt(overrides.highSteps), ls = parseInt(overrides.lowSteps);
-            const hl = findHighLowSamplers(wf);
-            if (hl && !isNaN(hs) && !isNaN(ls) && hs >= 0 && ls >= 0 && hs + ls > 0) {
-              hl.high.widgets_values[3] = hs + ls;
-              hl.high.widgets_values[7] = 0;
-              hl.high.widgets_values[8] = hs;
-              hl.low.widgets_values[3] = hs + ls;
-              hl.low.widgets_values[7] = hs;
-            }
-          }
-
-          // Pin seed on the resolved Seed node (omit/-1 = let the client randomize)
-          if (overrides.seed !== undefined && overrides.seed !== null && Number(overrides.seed) >= 0) {
-            const seedVal = Math.floor(Number(overrides.seed));
-            const seedNode = resolveSeedNode(wf, mapping);
-            if (seedNode && seedNode.widgets_values) seedNode.widgets_values[0] = seedVal;
-          }
-
-          // Activate exactly one style/quality preset group; mute the others.
-          if (overrides.preset) {
-            const presetGroups = detectPresetGroups(wf);
-            const byId = {};
-            for (const n of wf.nodes || []) byId[n.id] = n;
-            for (const g of presetGroups) {
-              const targetMode = g.title === overrides.preset ? 0 : 2; // 0 = active, 2 = muted
-              for (const id of g.memberIds) { if (byId[id]) byId[id].mode = targetMode; }
-            }
-          }
-
           const prompt = await workflowToPrompt(wf);
           if (!Object.keys(prompt).length) {
             jsonRes(res, { error: 'Workflow resolves to no runnable output nodes (is ComfyUI running? are all savers muted/bypassed?)' }, 422);
             return;
           }
 
-          // CFG override — applied to the CONVERTED prompt, which reflects the
-          // samplers that actually execute. Graph-level CFG sources are too
-          // ambiguous to write directly (sliders, rgthree config nodes, and
-          // per-sampler widgets can coexist, some feeding pruned branches).
-          if (overrides.cfg !== undefined && overrides.cfg !== null) {
-            const cfgVal = parseFloat(overrides.cfg);
-            if (!isNaN(cfgVal) && cfgVal >= 0) {
-              for (const [id, n] of Object.entries(prompt)) {
-                if (!(n.class_type || '').startsWith('KSampler') || typeof (n.inputs || {}).cfg !== 'number') continue;
-                n.inputs.cfg = cfgVal;
-                // Keep the returned graph (extra_pnginfo / embedded metadata) in step
-                const gn = (wf.nodes || []).find(x => String(x.id) === id);
-                if (gn && Array.isArray(gn.widgets_values)) {
-                  const idx = gn.type === 'KSamplerAdvanced' ? 4 : (gn.type === 'KSampler' ? 3 : -1);
-                  if (idx >= 0 && typeof gn.widgets_values[idx] === 'number') gn.widgets_values[idx] = cfgVal;
-                }
-              }
-              const ctl = resolveCfg(wf);
-              if (ctl) ctl.set(cfgVal);   // sliders/primitives stay visually consistent
-            }
-          }
           // Warn about node types this ComfyUI doesn't have installed. Their branch is
           // either dropped or (when an input type matches) passed through, so the run
           // can look fine while doing something the workflow never asked for.

@@ -58,10 +58,10 @@ export default {
     async function load() {
       loading.value = true; error.value = '';
       try {
-        // Both: /all carries enabled + label + mapping + candidates, /workflows
-        // is the only place shortcuts show up.
+        // Both: /all carries every workflow with its label and enabled flag,
+        // /workflows is the only place shortcuts show up.
         const [every, listed] = await Promise.all([api.workflowsAll(), api.workflows()]);
-        all.value = (every || []).map(w => ({ ...w, label: w.label || '', mapping: w.mapping || {} }));
+        all.value = (every || []).map(w => ({ ...w, label: w.label || '' }));
         const counts = {};
         for (const w of listed || []) if (w.shortcut && w.parent) counts[w.parent] = (counts[w.parent] || 0) + 1;
         shortcuts.value = counts;
@@ -81,19 +81,15 @@ export default {
     const open = w => router.push({ name: 'inspect', query: { wf: w.name } });
 
     // The store is replaced wholesale on every save, so this always sends every
-    // enabled name, every label and every mapping — a delta would drop the rest.
-    // Mappings are no longer edited here, but they are still round-tripped: the
-    // classic controls read them, and dropping them would silently retarget a
-    // workflow that relies on one.
+    // enabled name and every label — a delta would drop the rest.
     async function saveAll(what) {
       if (saving.value) return false;
       saving.value = true;
-      const payload = { enabled: [], labels: {}, mappings: {} };
+      const payload = { enabled: [], labels: {} };
       for (const w of all.value) {
         if (w.enabled) payload.enabled.push(w.name);
         const lbl = (w.label || '').trim();
         if (lbl && lbl !== w.name) payload.labels[w.name] = lbl;
-        if (w.mapping && Object.keys(w.mapping).length) payload.mappings[w.name] = w.mapping;
       }
       try {
         await api.manageWorkflows(payload);

@@ -102,11 +102,14 @@ parent), and drops a one-time `.bak` beside the file before the first overwrite.
 
 ### The workflow form, and the three ways to make a change stick
 
-Detection builds the form; nothing else does. There are no "classic" controls any
-more, and `/api/workflow-config` with its prompt/steps/seed **node mapping**
-(`resolvePromptNode` and friends, `store.mappings`) is now dead weight — nothing
-in the app calls it. Stored mappings are still round-tripped by
-`/api/workflows/manage` so an old install is not silently retargeted.
+Detection builds the form; nothing else does. The "classic" controls and
+everything that served them are gone: `/api/workflow-config`,
+`/api/workflow-nodes`, the prompt/steps/seed **node mapping**
+(`resolvePromptNode` and friends, `workflowCandidates`) and the legacy override
+branches of `/api/workflow-prompt`, which now takes `fieldValues` and nothing
+else. `store.mappings` is still accepted and ignored by `/api/workflows/manage`,
+and an existing one is left in the store — going back to an older build should
+find what it left.
 
 What a change does depends on which control saved it:
 
