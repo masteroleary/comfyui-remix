@@ -26,6 +26,10 @@ export default {
     const route = useRoute();
     const isBrowse = computed(() => route.name === 'browse');
     const isHome = computed(() => route.name === 'home');
+    // Anything that takes the screen: the shell's own dialogs, and the viewer,
+    // which is a route rather than an overlay but reads as one.
+    const overlayUp = computed(() => !!(store.ui.remix || store.ui.jobs || store.ui.move
+      || store.ui.merge || confirmBox.value || route.name === 'view'));
     const confirmBox = ref(null);   // { title, body, ok, run } or null
 
     async function logout() {
@@ -85,7 +89,7 @@ export default {
     // Remix and Jobs share z-index 3000, so raising one lowers the other.
     const openJobs = () => { store.ui.remix = null; store.ui.jobs = true; };
 
-    return { store, isBrowse, isHome, logout, onBulk, confirmBox, afterMutation,
+    return { store, isBrowse, isHome, overlayUp, logout, onBulk, confirmBox, afterMutation,
              runningCount, leadPct, openJobs };
   },
   template: `
@@ -96,12 +100,12 @@ export default {
            browse routes, which left Settings unreachable from Home, the viewer,
            chat, voice and inspect — including on a fresh install, where Home is
            where you land and configuring the media root is the first thing needed. -->
-      <router-link v-if="!isBrowse && !isHome" class="shell-settings" title="Settings" :to="{ name: 'settings' }">⚙</router-link>
+      <router-link v-if="!isBrowse && !isHome && !overlayUp" class="shell-settings" title="Settings" :to="{ name: 'settings' }">⚙</router-link>
 
       <!-- Home carries Log out as the last tile in its menu and browse carries it
            inline in .hdr-row1, so on those two routes the corner button would be a
            free-floating duplicate. The viewer, inspect and friends still need it. -->
-      <button v-if="store.authEnabled && !isHome && !isBrowse" class="shell-logout" title="Log out" @click="logout">
+      <button v-if="store.authEnabled && !isHome && !isBrowse && !overlayUp" class="shell-logout" title="Log out" @click="logout">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
@@ -125,15 +129,17 @@ export default {
            closing it must not depend on which of those is still mounted. -->
 
       <!-- Global run chrome: a hairline progress bar across the top and a count
-           badge, both only while something is actually running and the Jobs list
-           is not already up. They live in the shell because a job outlives the
-           dialog that started it and any route it was started from. -->
-      <div v-if="runningCount > 0 && !store.ui.jobs" class="rmx-topbar"
+           badge, both only while something is actually running and nothing has
+           taken the screen. They live in the shell because a job outlives the
+           dialog that started it and any route it was started from — but a
+           dialog is not a page, and floating chrome over one lands on its own
+           controls. -->
+      <div v-if="runningCount > 0 && !overlayUp" class="rmx-topbar"
            :title="runningCount + ' job(s) running — click for Jobs'" @click="openJobs">
         <div class="rmx-topbar-fill" :class="{ indet: leadPct === 0 }"
              :style="leadPct > 0 ? { width: leadPct + '%' } : {}"></div>
       </div>
-      <button v-if="runningCount > 0 && !store.ui.jobs" class="rmx-fab" title="Running jobs"
+      <button v-if="runningCount > 0 && !overlayUp" class="rmx-fab" title="Running jobs"
               @click="openJobs">⚡ {{ runningCount }}</button>
 
       <JobsDialog v-if="store.ui.jobs" />

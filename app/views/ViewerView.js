@@ -22,7 +22,7 @@ import { api, fileUrl } from '../api.js';
 import { browseTo, viewTo, joinRoot } from '../router.js';
 
 const { ref, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } = window.Vue;
-const { useRouter } = window.VueRouter;
+const { useRoute, useRouter } = window.VueRouter;
 
 // This view carries its own stylesheet so it is styled wherever it is reached
 // from. Idempotent: the <link> in index.html wins and this no-ops.
@@ -110,6 +110,7 @@ export default {
     path: { type: [Array, String], default: () => [] },
   },
   setup(props) {
+    const route = useRoute();
     const router = useRouter();
     const vid = ref(null);
     const toolsEl = ref(null);
@@ -324,9 +325,14 @@ export default {
     // the overlay it replaced. Opened cold from a bookmark there is no history
     // to unwind, and dropping the user on a blank tab would be worse than
     // showing them the folder the file lives in.
+    // Guards a double Esc mid-navigation. It has to be cleared when the viewer
+    // lands on a file again, because /view/A → /view/B reuses this component
+    // rather than remounting it: left set, the next ✕ or Esc did nothing at all
+    // and the viewer could not be closed for the rest of the session.
     let leaving = false;
+    watch(() => route.fullPath, () => { leaving = false; });
     function close() {
-      if (leaving) return;   // a second Esc mid-navigation would walk back twice
+      if (leaving) return;
       leaving = true;
       slideStop();
       if (window.history.state && window.history.state.back) router.back();
