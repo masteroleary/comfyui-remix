@@ -82,10 +82,12 @@ export default {
 
     // Plain left-click opens in the app; modified clicks keep the <a href> so
     // "open in new tab" still works on the raw file.
-    function thumbClick(e, path) {
+    // jobId is given for an output and left off for the source file: the source is
+    // what went in, so its neighbours are its own folder's, not this run's.
+    function thumbClick(e, path, jobId) {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
       e.preventDefault();
-      const to = viewTo(path, store.roots);
+      const to = viewTo(path, store.roots, jobId ? { job: jobId } : null);
       if (to) { close(); router.push(to); }
     }
 
@@ -158,7 +160,7 @@ export default {
 
               <div v-if="j.results.length" class="rmx-outgrid" style="margin-top:6px">
                 <a v-for="f in j.results" :key="f.path" class="rmx-out" :href="fileUrl(f.path, f.v)"
-                   target="_blank" rel="noopener" @click="thumbClick($event, f.path)">
+                   target="_blank" rel="noopener" @click="thumbClick($event, f.path, j.id)">
                   <img :src="jobThumb(f)" loading="lazy" @error="thumbFail">
                 </a>
               </div>

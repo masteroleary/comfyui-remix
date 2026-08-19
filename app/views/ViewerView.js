@@ -18,6 +18,11 @@
 // they are the app-wide record of what the viewer is showing; they are derived
 // here, never read back as the source of truth.
 import { store, mediaItems, SLIDE_STEPS, setSlideSpeed, setSlideVideoPlay, showToast } from '../store.js';
+// The run engine, for the job a scoped viewer steps through. A static import
+// where the dialog below is a lazy one, and it costs nothing extra: AppShell
+// already imports this module eagerly for the progress badge, so the engine is
+// in the graph before the viewer is ever reached.
+import { jobs, outputItems, forgetOutput } from '../components/RemixDialog.js';
 import { api, fileUrl } from '../api.js';
 import { browseTo, viewTo, joinRoot } from '../router.js';
 
@@ -127,10 +132,29 @@ export default {
       const rel = Array.isArray(props.path) ? props.path.join('/') : String(props.path || '');
       return joinRoot(props.root || 'fav', rel, store.roots);
     });
+    // ── Scope ────────────────────────────────────────────────────────────
+    // A run's outputs are a set, not a folder. Opened from a job's grid the URL
+    // carries ?job=<id>, and the viewer then walks what that job made and nothing
+    // else — where before, clicking the first thumbnail listed the whole output
+    // directory and buried the second one behind every older file in it.
+    //
+    // The list is the job's own results, which the reconciler pushes to as runs
+    // land, so an image that arrives while you are looking at the previous one
+    // simply lights up the next arrow. Nothing here polls or reloads for that.
+    const scopeId = computed(() => String(route.query.job || ''));
+    const scopeJob = computed(() => (scopeId.value ? jobs.list.find(j => j.id === scopeId.value) || null : null));
+    // Scoped from the moment the URL says so, and un-scoped only once the store has
+    // actually loaded and the job turns out not to exist: the jobs list comes out of
+    // IndexedDB after the first paint, and falling back to the folder in that gap is
+    // precisely what the scope is here to prevent.
+    const scoped = computed(() => !!scopeId.value && (!!scopeJob.value || !jobs.loaded));
+
     // mediaItems filters on a `type` field the listing doesn't send (see the
     // report); the isDir/isVideo/isImage/isAudio booleans it does send are what
     // decides whether an item is something the viewer can page onto.
-    const list = computed(() => mediaItems.value.filter(i => !i.isDir && (i.isVideo || i.isImage || i.isAudio)));
+    const list = computed(() => (scoped.value
+      ? outputItems(scopeJob.value)
+      : mediaItems.value.filter(i => !i.isDir && (i.isVideo || i.isImage || i.isAudio))));
     const idx = computed(() => list.value.findIndex(m => same(m.path, abs.value)));
     const count = computed(() => list.value.length);
     // A deep-linked file (or one whose page hasn't arrived yet) still has to
@@ -154,9 +178,11 @@ export default {
     // ‹ › are live at the edges of the page too: there may be another page to
     // walk into. page/pages come from the listing, which is why the pre-SPA
     // viewer had to mirror them by hand.
-    const hasPrev = computed(() => idx.value > 0 || store.page > 1);
-    const hasNext = computed(() => idx.value < count.value - 1 || store.page < store.pages);
-    const canPlay = computed(() => count.value > 1 || store.pages > 1);
+    // Scoped, the job IS the list: there is no page behind or ahead of it, and the
+    // grid's own paging state belongs to whatever folder is still loaded behind us.
+    const hasPrev = computed(() => idx.value > 0 || (!scoped.value && store.page > 1));
+    const hasNext = computed(() => idx.value < count.value - 1 || (!scoped.value && store.page < store.pages));
+    const canPlay = computed(() => count.value > 1 || (!scoped.value && store.pages > 1));
     const speedIdx = computed(() => clamp(store.viewer.speedIdx, 0, SLIDE_STEPS.length - 1));
     const canSlower = computed(() => speedIdx.value > 0);
     const canFaster = computed(() => speedIdx.value < SLIDE_STEPS.length - 1);
@@ -202,7 +228,9 @@ export default {
       if (!it || same(it.path, abs.value)) return;
       // viewTo answers null for a path under neither root; replace(null) would
       // throw into the catch below and read as a failed navigation.
-      const to = viewTo(it.path, store.roots);
+      // Carry the query across: the scope lives in the URL, so a step that dropped
+      // it would land the next output back in folder mode.
+      const to = viewTo(it.path, store.roots, route.query);
       if (!to) { console.warn('[viewer] no route for', it.path); return; }
       try { await router.replace(to); }
       catch (e) { console.warn('[viewer] navigation failed', e); return; }
@@ -213,6 +241,7 @@ export default {
     async function nav(delta) {
       const ni = idx.value + delta;
       if (ni >= 0 && ni < count.value) { await show(ni); return; }
+      if (scoped.value) return;   // the ends of a job are the ends of the list
       if (navBusy) return;
       navBusy = true;
       store.viewer.loading = true;
@@ -295,6 +324,7 @@ export default {
     }
     async function slideAdvance() {
       if (idx.value + 1 < count.value) { await show(idx.value + 1); return; }
+      if (scoped.value) { if (count.value) await show(0); return; }
       if (store.page < (store.pages || 1)) {
         const before = cur.value ? cur.value.path : null;
         await nav(1);
@@ -449,6 +479,15 @@ export default {
     // end of the list. Closes only when nothing is left.
     async function afterRemoval(p) {
       const at = idx.value;
+      // Scoped, the list is the job record — the same place the inspect page takes
+      // a deleted output out of, so the run's grid stops offering a file that is
+      // gone rather than showing a broken thumbnail until the next reload.
+      if (scoped.value) {
+        forgetOutput(scopeJob.value, p);
+        if (!count.value) { close(); return; }
+        await show(clamp(at < 0 ? 0 : at, 0, count.value - 1));
+        return;
+      }
       const gi = store.items.findIndex(i => same(i.path, p));
       if (gi < 0) {
         // Not on the loaded page — the list can't be advanced safely, so
@@ -510,6 +549,26 @@ export default {
       if (document.hidden && !remixing.value) close();
     }
 
+    // Entered cold (bookmark, refresh, a link from elsewhere): there is no loaded
+    // page behind us, so ‹ › would have nothing to step through. Fetch the folder
+    // this file lives in and page from there.
+    //
+    // A scope has no use for the folder, but it does still need the roots: they are
+    // what turns the URL back into an absolute path, and nothing loads them app-wide
+    // — every view fetches its own. Hence the order here, and hence a function: a
+    // deep link whose job never turns up drops out of the scope once the store has
+    // loaded, and then the folder is the only list left to give it.
+    async function ensureFolderList() {
+      if (idx.value >= 0) return;
+      if (!store.roots.fav) { try { store.roots = await api.roots(); } catch {} }
+      if (scoped.value) return;
+      store.viewer.loading = true;
+      try { await loadPage(store.page || 1, parentDir(abs.value)); }
+      catch (e) { showToast('Could not list this folder: ' + e.message); }
+      finally { store.viewer.loading = false; }
+    }
+    watch(scoped, on => { if (!on) ensureFolderList(); });
+
     // ── Lifecycle ────────────────────────────────────────────────────────
     store.viewer.open = true;
     store.viewer.overDialog = false;
@@ -523,16 +582,7 @@ export default {
       document.addEventListener('touchstart', onDocDown, true);
       document.addEventListener('visibilitychange', onVisibility);
 
-      // Entered cold (bookmark, refresh, a link from elsewhere): there is no
-      // loaded page behind us, so ‹ › would have nothing to step through.
-      // Fetch the folder this file lives in and page from there.
-      if (idx.value < 0) {
-        if (!store.roots.fav) { try { store.roots = await api.roots(); } catch {} }
-        store.viewer.loading = true;
-        try { await loadPage(store.page || 1, parentDir(abs.value)); }
-        catch (e) { showToast('Could not list this folder: ' + e.message); }
-        finally { store.viewer.loading = false; }
-      }
+      await ensureFolderList();
     });
 
     onUnmounted(() => {

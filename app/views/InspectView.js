@@ -28,7 +28,7 @@ import { viewTo } from '../router.js';
 import MediaTile from '../components/MediaTile.js';
 // The run engine. It lives in RemixDialog for historical reasons (see the note
 // at the top of that file); what matters here is that there is exactly one.
-import { launchJob, cancelJob, jobs, link, presetFromEmbedded } from '../components/RemixDialog.js';
+import { launchJob, cancelJob, jobs, link, presetFromEmbedded, outputItems, forgetOutput } from '../components/RemixDialog.js';
 import ReplacementRules from '../components/ReplacementRules.js';
 import WorkflowFields from '../components/WorkflowFields.js';
 
@@ -46,11 +46,7 @@ if (!document.querySelector('link[href="' + CSS_HREF + '"]')) {
 }
 
 const enc = encodeURIComponent;
-const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'];
-const VIDEO_EXT = ['mp4', 'webm', 'mkv', 'mov'];
 const EMBEDDABLE_RE = /\.(png|mp4|webm|mkv|mov)$/i;
-const extOf = name => String(name || '').split('.').pop().toLowerCase();
-const isVideoFile = name => VIDEO_EXT.includes(extOf(name));
 
 // ── Run state, kept across mounts ──────────────────────────────────────────
 // The route unmounts this view whenever an output is opened in the viewer, and
@@ -743,7 +739,7 @@ export default {
           await api.del(f.path);
           // The list belongs to the job record, so the row goes from there —
           // and the Jobs dialog stops showing a file that no longer exists.
-          if (job.value) job.value.results = job.value.results.filter(o => o.path !== f.path);
+          forgetOutput(job.value, f.path);
           outputSelected.value.delete(f.path);
         } catch {}
       }
@@ -752,10 +748,7 @@ export default {
     // the browser and the Remix dialog use, and goes to the same places: the
     // thumbnail to the viewer, the info bar to Remix on that file. The page's
     // own lightbox went with the switch — it had no other way in.
-    const outputTiles = computed(() => outputs.value.map(f => ({
-      path: f.path, name: f.name, v: f.v, thumbV: f.thumbV,
-      thumb: !!f.thumbPath, isVideo: isVideoFile(f.name), isImage: !isVideoFile(f.name),
-    })));
+    const outputTiles = computed(() => outputItems(job.value));
     async function openOutput(t) {
       // Going to look at an output and coming back is not leaving the page.
       expectReturn = runTarget.value;
@@ -763,7 +756,9 @@ export default {
       // built from may never have been fetched — every other surface gets them
       // from a listing it already made.
       if (!store.roots.out && !store.roots.fav) { try { store.roots = await api.roots(); } catch {} }
-      const to = viewTo(t.path, store.roots);
+      // Scoped to this run, like the dialog's grid: the arrows walk the outputs,
+      // not whatever else happens to live in the folder they were written to.
+      const to = viewTo(t.path, store.roots, job.value ? { job: job.value.id } : null);
       if (!to) { showToast('That output is outside the media roots — open it from its folder instead'); return; }
       router.push(to);
     }

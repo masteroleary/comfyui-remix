@@ -41,6 +41,26 @@ const jpost = (url, body) => fetch(url, {
 }).then(r => r.json());
 
 export const isVideoName = p => /\.(mp4|webm|mkv|mov|m4v)$/i.test(p || '');
+export const isAudioName = p => /\.(mp3|m4a|aac|flac|wav|ogg)$/i.test(p || '');
+// A job's outputs in the listing's shape, so the tile that renders a browsed file
+// renders one you just made. One mapper for every surface that shows them — this
+// dialog, the inspect page, and the viewer when it is scoped to a job — because
+// three copies is three chances for the same file to open as a different kind of
+// thing depending on which grid it was clicked in.
+//
+// The kind is read off the name here rather than left to the caller: a job record
+// holds a path and a name, and isVideo/isAudio/isImage are what a tile and the
+// viewer render from. Neither a clip nor a sound is an image, which is what an
+// unrecognised output looks like in a grid of them anyway. size/workflow/nsfw are
+// absent rather than false — a tile renders what it is given.
+export const outputItems = job => ((job && job.results) || []).map(f => {
+  const video = isVideoName(f.name);
+  const audio = !video && isAudioName(f.name);
+  return {
+    path: f.path, name: f.name, v: f.v, thumbV: f.thumbV, thumb: !!f.thumbPath,
+    isVideo: video, isAudio: audio, isImage: !video && !audio,
+  };
+});
 // Thumbnail for a job's source or output. A video has no still of its own, so it
 // needs either the companion PNG the save node wrote (thumbPath, when /api/recent-
 // outputs managed to pair one) or /thumb/, the same route the grid uses. Pointing an
@@ -516,6 +536,21 @@ export async function cancelJob(job) {
   }
   job.status = 'error'; job.endTime = Date.now(); job._pct = 100; job._queued = 0; job._node = 'Cancelled';
   persist(job); bcast({ k: 'poke' });
+}
+// An output that is not there any more — deleted, or favorited out from under
+// the run that made it. The list belongs to the job record, so it goes from
+// there and the record is written back: in memory alone it returns on the next
+// reload as a thumbnail pointing at nothing. Paths are compared loosely because
+// a caller may be holding one that has been round-tripped through the URL, where
+// Windows separators and case do not survive.
+export function forgetOutput(job, path) {
+  if (!job || !path) return;
+  const key = p => String(p || '').replace(/\\/g, '/').toLowerCase();
+  const want = key(path);
+  const next = (job.results || []).filter(f => key(f.path) !== want);
+  if (next.length === (job.results || []).length) return;
+  job.results = next;
+  persist(job);
 }
 export async function deleteJob(job) { const i = jobs.list.indexOf(job); if (i >= 0) jobs.list.splice(i, 1); try { await JobDB.del(job.id); } catch (e) {} }
 
@@ -1003,18 +1038,17 @@ export default {
     // would come up underneath, and a second Remix has to be the shell's copy
     // (keyed on path) rather than one dialog stacked on another.
     const router = useRouter();
-    // The results carry only what the reconciler recorded, so they are mapped to
-    // the listing's shape once here — as a computed, not per render, or every
-    // tile would get a freshly-built prop object each time the dialog redraws,
-    // which during a run is every progress tick. `size`/`workflow`/`nsfw` are
-    // absent rather than false: the tile renders what it is given.
-    const resultTiles = computed(() => ((job.value && job.value.results) || []).map(f => ({
-      path: f.path, name: f.name, v: f.v, thumbV: f.thumbV,
-      thumb: !!f.thumbPath, isVideo: isVideoName(f.name), isImage: !isVideoName(f.name),
-    })));
+    // A computed, not a call per render: every tile would otherwise get a freshly
+    // built prop object each time the dialog redraws, which during a run is every
+    // progress tick.
+    const resultTiles = computed(() => outputItems(job.value));
+    // Opened from this grid, the viewer's neighbours are the rest of this job —
+    // not the thousand older files in the folder they were written to, which is
+    // what it used to list and page through. The job travels in the URL, so the
+    // arrows keep the scope and a run still landing simply lights the next one up.
     async function openResultFile(t) {
       if (!store.roots.out && !store.roots.fav) { try { store.roots = await api.roots(); } catch (e) {} }
-      const to = viewTo(t.path, store.roots);
+      const to = viewTo(t.path, store.roots, job.value ? { job: job.value.id } : null);
       if (!to) { showToast('That output is outside the media roots — open it from its folder instead'); return; }
       emit('close');
       router.push(to);

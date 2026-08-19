@@ -109,8 +109,16 @@ export function browseTo(patch, base, roots) {
 // simply are not loaded yet. The alternative is a route with an empty path
 // segment, which /view/:root/:path(.*)+ rejects at push time; callers can say
 // something useful instead of catching a router error.
-export function viewTo(absPath, roots) {
+//
+// `query` is how a caller says what the file's neighbours are: { job: <id> }
+// scopes the viewer to that run's outputs instead of to the folder the file
+// happens to sit in. It rides in the URL rather than in a variable because the
+// viewer derives everything from the address bar — a scope held anywhere else
+// would not survive the replace() that steps to the next item.
+export function viewTo(absPath, roots, query) {
   const { key, rel } = splitRoot(absPath, roots || { fav: '', out: '' });
   if (!rel) return null;
-  return { name: 'view', params: { root: key, path: rel.split('/') } };
+  const to = { name: 'view', params: { root: key, path: rel.split('/') } };
+  if (query && Object.keys(query).length) to.query = Object.assign({}, query);
+  return to;
 }
