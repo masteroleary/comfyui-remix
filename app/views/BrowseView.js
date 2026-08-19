@@ -8,6 +8,9 @@ import { store, showToast, registerReload, toggleSelected } from '../store.js';
 import { api } from '../api.js';
 import { browseQuery, browseTo, viewTo } from '../router.js';
 import MediaTile from '../components/MediaTile.js';
+// The run engine, for the folder-refresh subscription below. AppShell already
+// imports this module eagerly for the run badge, so it is in the graph anyway.
+import { onOutputsLanded } from '../components/RemixDialog.js';
 
 const { watch, onMounted, onUnmounted } = window.Vue;
 const { useRoute, useRouter } = window.VueRouter;
@@ -19,7 +22,13 @@ export default {
     const route = useRoute();
     const router = useRouter();
 
-    async function load() {
+    // `quiet` is a background refresh: it leaves store.loading alone, because the
+    // grid lives behind a v-if on that flag and would blink to a spinner every
+    // time a run landed a file. It keeps its errors to itself for the same
+    // reason — a blip while a run is writing should not replace the folder you
+    // are looking at with an error message.
+    async function load(opts) {
+      const quiet = !!(opts && opts.quiet);
       // Roots are needed to turn /browse/out/x back into an absolute dir, so they
       // have to be known before the first listing — fetched once, then cached.
       if (!store.roots.fav) {
@@ -27,7 +36,7 @@ export default {
       }
       const q = browseQuery(route, store.roots);
       Object.assign(store, q);
-      store.loading = true; store.error = '';
+      if (!quiet) { store.loading = true; store.error = ''; }
       try {
         const data = await api.list({
           dir: q.dir || '', page: q.page, limit: store.limit,
@@ -49,20 +58,54 @@ export default {
           store.roots = { fav: data.favoritesDir || store.roots.fav, out: data.comfyOutputDir || store.roots.out };
         }
       } catch (e) {
-        store.error = e.message;
-        store.items = [];
-        showToast('Could not list that folder: ' + e.message);
+        if (!quiet) {
+          store.error = e.message;
+          store.items = [];
+          showToast('Could not list that folder: ' + e.message);
+        }
       }
-      store.loading = false;
+      if (!quiet) store.loading = false;
     }
 
     // fullPath rather than params: page and search changes are query-only, and a
     // watcher on params alone would leave the grid showing the previous page.
-    watch(() => route.fullPath, load);
-    watch(() => store.safeOn, load);        // not in the URL, still changes the listing
-    const unregister = registerReload(load); // dialogs and bulk actions refresh in place
+    watch(() => route.fullPath, () => load());
+    watch(() => store.safeOn, () => load());        // not in the URL, still changes the listing
+    const unregister = registerReload(() => load()); // dialogs and bulk actions refresh in place
     onUnmounted(unregister);
-    onMounted(load);
+    onMounted(() => load());
+
+    // A run writing into the folder on screen updates it in place, rather than
+    // leaving you to walk out and back to see what landed.
+    //
+    // It re-lists rather than splicing a tile in. Sort order, paging, the type
+    // filter, the search and safe mode are all decided server-side, so a tile
+    // built here would sit in the wrong place under any sort but the default —
+    // and, worse, would walk straight past the content filter. One extra listing
+    // per batch of outputs is cheaper than a second copy of those rules living
+    // out here and drifting from the server's.
+    // Either separator, depending on who built the path, and case-insensitive
+    // because the folder on screen came from a URL and the output path from a
+    // directory scan.
+    const norm = t => String(t || '').replace(/\\/g, '/').toLowerCase();
+    const inThisFolder = p => {
+      const cur = norm(store.dir);
+      if (!cur) return false;
+      const d = norm(p).replace(/\/[^/]*$/, '');
+      // Flattened, the folder on screen is the whole tree under it.
+      return d === cur || (store.flatten && d.startsWith(cur + '/'));
+    };
+    let refreshT = null;
+    const stopWatchingOutputs = onOutputsLanded(paths => {
+      // Page 1 only. A new file belongs at the top of the newest-first default,
+      // and re-listing a later page would shuffle tiles under someone reading
+      // them in exchange for nothing they can see.
+      if (store.page !== 1 || !paths.some(inThisFolder)) return;
+      // One refresh for a batch: a job of four lands four files in a few seconds.
+      clearTimeout(refreshT);
+      refreshT = setTimeout(() => load({ quiet: true }), 600);
+    });
+    onUnmounted(() => { clearTimeout(refreshT); stopWatchingOutputs(); });
 
     // The listing marks folders with isDir — there is no `type` field on an item.
     const open = item => {

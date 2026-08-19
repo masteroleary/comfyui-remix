@@ -22,7 +22,7 @@ import { store, mediaItems, SLIDE_STEPS, setSlideSpeed, setSlideVideoPlay, showT
 // where the dialog below is a lazy one, and it costs nothing extra: AppShell
 // already imports this module eagerly for the progress badge, so the engine is
 // in the graph before the viewer is ever reached.
-import { jobs, outputItems, forgetOutput } from '../components/RemixDialog.js';
+import { jobs, outputItems, forgetOutput, onOutputsLanded } from '../components/RemixDialog.js';
 import { api, fileUrl } from '../api.js';
 import { browseTo, viewTo, joinRoot } from '../router.js';
 
@@ -194,7 +194,11 @@ export default {
     // Same params BrowseView sends, deliberately: the viewer pages through the
     // grid's list, and a listing built from different params would step through
     // a different set of files than the grid behind it shows.
-    async function loadPage(p, dirOverride) {
+    // `abandonIf` lets a caller drop a listing it no longer wants once the reply
+    // is back. store.items is shared with the grid, so a background refresh that
+    // resolves after this view is gone would otherwise write this folder's page
+    // over whatever the grid has since loaded.
+    async function loadPage(p, dirOverride, abandonIf) {
       const dir = dirOverride || store.dir || parentDir(abs.value);
       const data = await api.list({
         dir: dir || '', page: p, limit: store.limit,
@@ -205,6 +209,7 @@ export default {
         type: store.type, flatten: store.flatten ? '1' : '0',
         safe: store.safeOn ? '1' : '0',
       });
+      if (abandonIf && abandonIf()) return data;
       store.items = data.items || [];
       store.total = data.total || 0;
       store.pages = data.pages || 1;
@@ -568,6 +573,40 @@ export default {
       finally { store.viewer.loading = false; }
     }
     watch(scoped, on => { if (!on) ensureFolderList(); });
+
+    // A file landing in the folder being paged through belongs in the list at
+    // once. Under the newest-first default it takes a place ahead of whatever is
+    // on screen, so ‹ goes from dead to live without the viewer being closed and
+    // reopened to notice — which is the whole point, since the run that wrote it
+    // was very likely started from this image.
+    //
+    // Folder mode only: scoped, the job's own results grow as its runs land and
+    // the arrows already follow them.
+    //
+    // The new listing is applied only if it leaves the current file addressable.
+    // A page holds `limit` items, so enough arrivals push whatever is on screen
+    // onto the next one, and a list that no longer contains it would leave the
+    // arrows stepping around a file that is not in them. Keeping the older list
+    // in that case costs the new thumbnail and nothing else — the next arrival
+    // tries again.
+    let outRefreshT = null, closed = false;
+    const stopWatchingOutputs = onOutputsLanded(paths => {
+      if (scoped.value) return;
+      const dir = store.dir || parentDir(abs.value);
+      if (!dir || !paths.some(p => same(parentDir(p), dir))) return;
+      // One refresh for a batch, as in the grid: a job of four lands four files
+      // within a few seconds of each other.
+      clearTimeout(outRefreshT);
+      outRefreshT = setTimeout(async () => {
+        const prev = { items: store.items, page: store.page, total: store.total, pages: store.pages };
+        // No loading flag: this is a background refresh of a list the viewer is
+        // sitting on, not a navigation, and the spinner would flash over the image.
+        // Dropped outright if the viewer closed while the listing was in flight.
+        try { await loadPage(store.page, dir, () => closed); } catch (e) { return; }
+        if (!closed && idx.value < 0) Object.assign(store, prev);
+      }, 600);
+    });
+    onUnmounted(() => { closed = true; clearTimeout(outRefreshT); stopWatchingOutputs(); });
 
     // ── Lifecycle ────────────────────────────────────────────────────────
     store.viewer.open = true;

@@ -412,6 +412,19 @@ async function submitPrompt(job, prompt, graph, log) {
     return res.prompt_id;
   } catch (e) { log('Error: ' + e.message, 'err'); return null; }
 }
+// ── Outputs landing ────────────────────────────────────────────────────────
+// Anything on screen that lists files can ask to hear about a job's outputs as
+// they arrive. The browse grid uses it to refresh the folder a run is writing
+// into: before this, an image only appeared there if you left the folder and
+// came back, which is an odd thing to have to do while watching the run that is
+// filling it.
+//
+// Subscribers are handed the paths that just landed and decide for themselves
+// whether they care — the engine has no idea what any view is showing, and this
+// stays true whether the run was started from the dialog, the inspect page or
+// another tab, because everything goes through the same collector.
+const outputWatchers = new Set();
+export function onOutputsLanded(fn) { outputWatchers.add(fn); return () => outputWatchers.delete(fn); }
 // Attribute outputs to THIS job by the filenames its own prompts reported —
 // safe with concurrent jobs, where a time-window diff would grab another's.
 // One pass. Split out of collectOutputs so a job still in flight can pick up
@@ -422,11 +435,14 @@ async function collectOnce(job, names) {
   try {
     const files = await jget('/api/recent-outputs?since=' + (job.startTime - 3600000));
     const seen = new Set(job.results.map(o => o.path));
-    let added = 0;
+    const landed = [];
     // Carry the mtime keys through: a job's thumbnails are cached like any
     // other media URL, and its outputs are the newest files on disk.
-    for (const f of files) if (names.has(f.name) && !seen.has(f.path)) { job.results.push({ path: f.path, name: f.name, thumbPath: f.thumbPath, v: f.v, thumbV: f.thumbV }); seen.add(f.path); added++; }
-    return added > 0;
+    for (const f of files) if (names.has(f.name) && !seen.has(f.path)) { job.results.push({ path: f.path, name: f.name, thumbPath: f.thumbPath, v: f.v, thumbV: f.thumbV }); seen.add(f.path); landed.push(f.path); }
+    // A watcher that throws is a watcher's problem, not a reason to lose the
+    // outputs this call just attached.
+    if (landed.length) for (const fn of outputWatchers) { try { fn(landed); } catch (e) {} }
+    return landed.length > 0;
   } catch (e) { return false; }
 }
 async function collectOutputs(job, names) {
