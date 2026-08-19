@@ -66,7 +66,15 @@ export function promptsMatching(keyword, keepId) {
   const all = promptsByCategory.value;
   const k = foldKey(keyword);
   if (!k) return { groups: all, filtered: false, keyword: '' };
-  const groups = all.map(g => {
+  // A category the keyword names outright wins on its own, before any of the
+  // containment below is tried. "Female" contains "male", so containment alone
+  // offers the Female shelf to [male] and — the reverse test being just as
+  // true — the Male shelf to [female]. An exact match is the keyword naming one
+  // shelf and meaning it, and nothing looser should be able to widen that.
+  // Falling through rather than returning here: whatever is already picked still
+  // has to survive the narrowing, and that is handled once, below.
+  const exact = all.filter(g => foldKey(g.category) === k);
+  const groups = exact.length ? exact : all.map(g => {
     const c = foldKey(g.category);
     // A category the keyword names hands over its whole shelf. The reverse
     // containment ([female-lead] finding "Female") needs a category long

@@ -202,11 +202,14 @@ select.rmx-inp{cursor:pointer}
 .rmx-node-edit.edited{border-color:#0a84ff;background:#0a2540;color:#eaf3ff}
 .rmx-node.edited>summary{color:#5ac8fa}
 .rmx-raw{margin:0;padding:8px 10px;font:11px/1.4 ui-monospace,monospace;color:#a8b3c7;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto}
-.rmx-repl{margin-top:14px;background:#1c1c1e;border:1px solid #38383a;border-radius:10px}
+.rmx-repl{margin:14px 0;background:#1c1c1e;border:1px solid #38383a;border-radius:10px}
 .rmx-repl>summary{list-style:none;cursor:pointer;padding:10px 12px;font-size:12px;color:#8e8e93;text-transform:uppercase;letter-spacing:.5px}
 .rmx-repl>summary::-webkit-details-marker{display:none}
 .rmx-repl>summary::before{content:'▸';display:inline-block;margin-right:6px;transition:transform .12s}
 .rmx-repl[open]>summary::before{transform:rotate(90deg)}
+/* Live rules are worth noticing from the collapsed summary: the run will not
+   send what is on screen, and this is the only thing that says so. */
+.rmx-repl>summary .rmx-repl-on{color:#ff9f0a;font-weight:700}
 .rmx-repl-body{padding:2px 12px 12px}
 .rmx-repl-all{display:flex;align-items:center;gap:6px;font-size:12px;color:#8e8e93;margin-bottom:8px;cursor:pointer;user-select:none}
 .rmx-repl-all input,.rmx-repl-row input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:#0a84ff}

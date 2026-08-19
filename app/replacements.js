@@ -59,10 +59,36 @@ export function stripLeftoverTokens(text) {
     .replace(/[ \t]+\n/g, '\n');
 }
 
+// A library prompt may itself contain [keyword]s — [female] resolving to
+// "…with [hair] and…, [outfit]" is what having shelves is for — so one sweep of
+// the rules is not enough. A single pass resolves a nested keyword only when its
+// rule happens to sit later in the list than the rule that introduced it, and
+// the list is in the order the rules were typed: nothing a rule author can see,
+// and nothing the editor lets them change. Worse, the leftover sweep then
+// deletes what did not resolve, so the run comes back subtly wrong rather than
+// visibly broken.
+//
+// So: every rule once, then the [keyword] rules again until nothing changes.
+// Only the keyword rules repeat — a free-text rule like woman -> beautiful woman
+// contains its own "find" and would grow on each pass, while a keyword rule
+// cannot normally reintroduce its own bracketed token. The cap is for when it
+// does: two rules feeding each other stop, and the leftover sweep clears the
+// tokens the cap left rather than sending brackets to the model.
+//
+// Replacements are inserted through a function, not a string, so a $ in prompt
+// text stays a $ — ComfyUI's own dynamic-prompt syntax writes {2$$a|b}, and the
+// string form of .replace() reads $$ and $& as instructions.
 export function applyReplacements(text) {
   if (typeof text !== 'string') return text;
+  const rules = activeReplacements();
   let out = text;
-  for (const r of activeReplacements()) out = out.replace(new RegExp(escRe(r.from), 'gi'), replacementText(r));
+  for (const r of rules) out = out.replace(new RegExp(escRe(r.from), 'gi'), () => replacementText(r));
+  const keyworded = rules.filter(isKeywordRule);
+  for (let pass = 0; pass < 4 && keyworded.length && /[[{]/.test(out); pass++) {
+    const before = out;
+    for (const r of keyworded) out = out.replace(new RegExp(escRe(r.from), 'gi'), () => replacementText(r));
+    if (out === before) break;
+  }
   return stripLeftoverTokens(out);
 }
 

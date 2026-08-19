@@ -1,0 +1,61 @@
+{
+  "_comment": "First-run defaults. Copied into the per-install stores (app-prompts.json) the first time the server finds one missing, then never read again — editing this changes what a NEW install starts with, not what an existing one has. Each shelf maps a prompt name to its text; an empty string is a named row waiting for wording. Each replacement names its prompt as Shelf/Name — the server resolves that to the prompt id and takes a text snapshot, so no id or wording is written twice. The Female rows embed [hair] and [outfit] on purpose, as the worked example of a prompt built from other prompts: pick one Female row and the shelves it names come with it.",
+  "prompts": {
+    "Action": {
+      "Selfie Pose": "she is holding a phone in front of her, she is taking a selfie",
+      "Swing for Ball": "she swings a tennis racket and hits a green tennis ball ",
+      "Victory Pose": "she holds up a peace sign, her arm bent, she leans down bent at the waist"
+    },
+    "Expression": {
+      "Flirty": "she is smiling coyly, her head tilted, her eyes looking up in a flirtatious manner",
+      "Intense Concentration": "she is focused, her eyes narrowed, her mouth slightly open",
+      "Tongue Out Silly": "she sticks her tongue out while smiling"
+    },
+    "Female": {
+      "Athletic": "she is a fit young adult female, she has light tan skin, a toned body and frame, muscular legs, [hair], [outfit]",
+      "Curvy": "she is a curvy young adult female, she has light tan skin, an hourglass figure with a hyper-thin waist, [hair], [outfit]",
+      "Petite": "she is a very small cute young adult female, she has light tan skin, a cute face, a very skinny body and frame, skinny legs and arms, [hair], [outfit]"
+    },
+    "Hair": {
+      "Brunette Ponytail": "she has a silky brunette ponytail, her hair tied back with a ribbon",
+      "Luscious Blonde": "she has long, wavy blonde hair, shiny and voluminous"
+    },
+    "Male": {
+      "Sitting": "he is a large cropped male, he is sitting",
+      "Standing": "he is a large cropped male, he is standing"
+    },
+    "Outfit": {
+      "Athletic": "she wears athletic wear, fitted leggings, sports bra, running shoes",
+      "Professional Suit": "she wears a professional suit, fitted blazer, pencil skirt, high heels",
+      "Sun Dress": "she wears a light summer dress, floral pattern, flowing fabric, sandals",
+      "Tennis": "she wears a tennis outfit, short skirt, fitted top, tennis shoes, wristbands"
+    },
+    "Scene": {
+      "Library": "library interior, dimly lit desks, bookshelves, people reading",
+      "Public Park": "outdoor public park, trees, grass, people walking dogs",
+      "Tennis Court": "outdoor tennis court, bleachers with people watching"
+    }
+  },
+  "replacements": [
+    {
+      "from": "[scene]",
+      "prompt": "Scene/Tennis Court"
+    },
+    {
+      "from": "[female]",
+      "prompt": "Female/Athletic"
+    },
+    {
+      "from": "[hair]",
+      "prompt": "Hair/Brunette Ponytail"
+    },
+    {
+      "from": "[action]",
+      "prompt": "Action/Selfie Pose"
+    },
+    {
+      "from": "[outfit]",
+      "prompt": "Outfit/Tennis"
+    }
+  ]
+}

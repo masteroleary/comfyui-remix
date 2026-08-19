@@ -28,7 +28,7 @@ scripts/
 !.claude/skills/
 app-workflows.json
 app-replacements.json
-app-prompts.json
+app-prompts*.json
 app-prompt-index.json
 debug-results.json
 Workflows/

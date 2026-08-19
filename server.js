@@ -1505,11 +1505,119 @@ let WORKFLOWS_DIR = path.join(COMFY_DIR, 'user', 'default', 'workflows');
 const WF_STORE_PATH = path.join(__dirname, 'app-workflows.json');
 
 // The prompt library: named blocks of prompt text, filed under a category.
-// Categories are seeded rather than fixed — these three are a starting point,
-// and the Prompts page can add to them.
+// Both lists are seeded rather than fixed, and the Prompts page adds to either.
+//
+// The seed itself lives in seed.json, not here — it is data an install starts
+// with, and somebody filling in what "Athletic" should say for their checkpoint
+// should not be editing the server to do it. Each shelf there maps a prompt name
+// to its text, so the category list and the prompts under it cannot disagree.
+//
+// It is copied out to app-prompts.json on first read and never consulted again:
+// editing seed.json changes what a NEW install starts with, never what an
+// existing one has. Ids are derived from category + name, so filling in the text
+// of a seeded row later leaves every rule that picked it pointing where it was.
 const PROMPTS_PATH = path.join(__dirname, 'app-prompts.json');
-const DEFAULT_CATEGORIES = ['Character', 'Scene', 'Action'];
-const defaultPrompts = () => ({ categories: DEFAULT_CATEGORIES.slice(), prompts: [] });
+const REPL_PATH = path.join(__dirname, 'app-replacements.json');
+const SEED_PATH = path.join(__dirname, 'seed.json');
+
+// seed.json, parsed. Read per call rather than held: it is touched once on a
+// fresh install and on the error paths below, and caching it would only mean an
+// edit to the file needing a restart before anything saw it.
+function readSeed() {
+  try { return JSON.parse(fs.readFileSync(SEED_PATH, 'utf8')) || {}; } catch { return {}; }
+}
+
+const seedPromptId = (cat, name) => 'seed-' + (cat + '-' + name).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+// seed.json's compact shape ({ Shelf: { Name: text } }) flattened into the store
+// shape. Key order is the shelf order, which is the order the page shows, and it
+// is also where the category list comes from — so the shelves and the prompts
+// filed under them cannot disagree the way two hand-kept lists would.
+function seededPrompts(seed) {
+  const shelves = (seed || readSeed()).prompts;
+  const categories = [], prompts = [];
+  if (shelves && typeof shelves === 'object') {
+    for (const [rawCat, rows] of Object.entries(shelves)) {
+      const category = String(rawCat).trim();
+      if (!category) continue;
+      categories.push(category);
+      if (!rows || typeof rows !== 'object') continue;
+      for (const [rawName, text] of Object.entries(rows)) {
+        const name = String(rawName).trim();
+        if (name) prompts.push({ id: seedPromptId(category, name), name, category, text: String(text || '') });
+      }
+    }
+  }
+  return { categories, prompts };
+}
+
+// Only a missing file is seeded, and only a missing file is written. A store
+// that exists but will not parse is served from the seed and left alone on
+// disk — overwriting it would turn one bad character into a lost library.
+function loadPromptStore() {
+  let raw;
+  try {
+    raw = fs.readFileSync(PROMPTS_PATH, 'utf8');
+  } catch (e) {
+    const seeded = seededPrompts();
+    // Nothing to seed from is not worth a file: written empty, it would be read
+    // back as the install's own empty library and a seed.json arriving later
+    // would never be looked at again.
+    if (e.code === 'ENOENT' && (seeded.categories.length || seeded.prompts.length)) {
+      try { fs.writeFileSync(PROMPTS_PATH, JSON.stringify(seeded, null, 2)); } catch {}
+    }
+    return seeded;
+  }
+  try {
+    const d = JSON.parse(raw);
+    return {
+      categories: Array.isArray(d.categories) ? d.categories : [],
+      prompts: Array.isArray(d.prompts) ? d.prompts : [],
+    };
+  } catch { return seededPrompts(); }
+}
+
+// The replacement rules the app starts with. A seeded rule names its prompt as
+// "Shelf/Name" rather than carrying an id and a copy of the text: the id is
+// derived the same way the prompt seed derives it, and the snapshot is read off
+// the prompt itself, so the two halves of the seed can never drift apart.
+//
+// A rule naming a prompt that is not in the seed is dropped rather than written
+// pointing at nothing — a rule with a dead id and no snapshot substitutes empty
+// and looks, on screen, exactly like one that is working.
+function seededReplacements() {
+  const seed = readSeed();
+  if (!Array.isArray(seed.replacements)) return [];
+  const prompts = seededPrompts(seed).prompts;
+  const out = [];
+  for (const r of seed.replacements) {
+    if (!r || typeof r !== 'object' || !r.from) continue;
+    const [category, name] = String(r.prompt || '').split('/');
+    const p = prompts.find(x => x.category === category && x.name === name);
+    if (!p) continue;
+    out.push({ from: String(r.from), to: p.text, on: r.on !== false, promptId: p.id });
+  }
+  return out;
+}
+
+// Same rule as the prompt store: a missing file is seeded and written, an
+// unreadable one is served from the seed and left where it is.
+function loadReplacementStore() {
+  let raw;
+  try {
+    raw = fs.readFileSync(REPL_PATH, 'utf8');
+  } catch (e) {
+    const seeded = { replacements: seededReplacements() };
+    if (e.code === 'ENOENT' && seeded.replacements.length) {
+      try { fs.writeFileSync(REPL_PATH, JSON.stringify(seeded, null, 2)); } catch {}
+    }
+    return seeded;
+  }
+  try {
+    const d = JSON.parse(raw);
+    return { replacements: Array.isArray(d.replacements) ? d.replacements : [] };
+  } catch { return { replacements: seededReplacements() }; }
+}
 
 function loadWfStore() {
   let store = { enabled: [], mappings: {}, labels: {}, fieldConfigs: {}, shortcuts: {} };
@@ -3116,10 +3224,7 @@ runTests();
 
   // API: Prompt replacements — stored on disk so they're shared across devices
   if (pn === '/api/replacements' && req.method === 'GET') {
-    fs.readFile(path.join(__dirname, 'app-replacements.json'), 'utf8', (err, raw) => {
-      if (err) { jsonRes(res, { replacements: [] }); return; }
-      try { jsonRes(res, JSON.parse(raw)); } catch { jsonRes(res, { replacements: [] }); }
-    });
+    jsonRes(res, loadReplacementStore());
     return;
   }
   if (pn === '/api/replacements' && req.method === 'POST') {
@@ -3134,7 +3239,7 @@ runTests();
         // text it resolved to when it was picked, and the fallback if it is gone.
         .map(r => ({ from: String(r.from || ''), to: String(r.to || ''), on: !!r.on, promptId: String(r.promptId || '') })) : [];
       try {
-        fs.writeFileSync(path.join(__dirname, 'app-replacements.json'), JSON.stringify({ replacements: list }, null, 2));
+        fs.writeFileSync(REPL_PATH, JSON.stringify({ replacements: list }, null, 2));
         jsonRes(res, { ok: true });
       } catch (e) { jsonRes(res, { error: e.message }, 500); }
     });
@@ -3146,16 +3251,7 @@ runTests();
   // replacement from here instead of taking free text, which is the whole
   // reason the library exists.
   if (pn === '/api/prompts' && req.method === 'GET') {
-    fs.readFile(PROMPTS_PATH, 'utf8', (err, raw) => {
-      if (err) { jsonRes(res, defaultPrompts()); return; }
-      try {
-        const d = JSON.parse(raw);
-        jsonRes(res, {
-          categories: Array.isArray(d.categories) && d.categories.length ? d.categories : DEFAULT_CATEGORIES,
-          prompts: Array.isArray(d.prompts) ? d.prompts : [],
-        });
-      } catch { jsonRes(res, defaultPrompts()); }
-    });
+    jsonRes(res, loadPromptStore());
     return;
   }
   if (pn === '/api/prompts' && req.method === 'POST') {
@@ -3169,7 +3265,7 @@ runTests();
       // that silently resurrects something deleted elsewhere.
       const categories = Array.isArray(body.categories)
         ? [...new Set(body.categories.map(c => String(c || '').trim()).filter(Boolean))]
-        : DEFAULT_CATEGORIES;
+        : seededPrompts().categories;
       const prompts = Array.isArray(body.prompts) ? body.prompts
         .filter(p => p && typeof p === 'object')
         .map(p => ({ id: String(p.id || ''), name: String(p.name || '').trim(), category: String(p.category || '').trim(), text: String(p.text || '') }))

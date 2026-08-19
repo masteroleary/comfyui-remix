@@ -71,7 +71,7 @@ export default {
   },
   template: `
     <details class="rmx-repl">
-      <summary>Prompt Replacements<span class="rmx-mut" v-if="replActiveCount"> — {{ replActiveCount }} active</span><span class="rmx-mut" v-else-if="replacements.length"> — {{ replacements.length }} off</span></summary>
+      <summary>Prompt Replacements<span class="rmx-repl-on" v-if="replActiveCount"> — {{ replActiveCount }} active</span><span class="rmx-mut" v-else-if="replacements.length"> — {{ replacements.length }} off</span></summary>
       <div class="rmx-repl-body">
         <div class="rmx-mut" style="font-size:12px;margin-bottom:8px">
           Applied to the prompt right before each run (case-insensitive, all matches).
