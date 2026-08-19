@@ -51,12 +51,20 @@ const DirNode = {
     const pick = () => { if (!blocked.value) ctx.state.selected = props.node.path; };
     return { picked, blocked, caret, pick };
   },
+  // The title has no apostrophe on purpose. This template is a JS template
+  // literal, so a backslash-escaped quote resolves to a bare ' before Vue's
+  // compiler ever sees the string, and "Can't" would close the expression's own
+  // string literal and stop the whole component compiling.
+  //
+  // The note lives out here rather than in the markup because an HTML comment
+  // between two attributes is not a comment at all: the parser ends the tag at
+  // the > of its -->, and every attribute after it becomes text the row renders
+  // literally. That is what happened here — the rows printed their own :title
+  // and @click source, and the lost @click meant clicking a folder no longer
+  // selected it, leaving the caret as the only control in the tree that worked.
   template: `
     <div>
       <div class="tree-row" :class="{ sel: picked, dis: blocked }" :style="{ paddingLeft: (10 + depth * 16) + 'px' }"
-           <!-- No apostrophe: the escape resolves before the compiler sees it, so
-                'Can\'t' ends the expression's string literal and the whole
-                component fails to compile. -->
            :title="blocked ? 'Cannot move a folder into itself' : node.path" @click="pick">
         <span class="tree-caret" :class="{ open: node.open }" @click="caret">
           <span v-if="node.loading" class="tree-spin"></span>
