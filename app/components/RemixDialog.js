@@ -553,6 +553,28 @@ function prefillFromEmbedded(fields, wfGraph) {
   }
 }
 
+// The style preset is the one control that is not a widget: the workflow states
+// it by leaving exactly one coloured group un-muted, so prefillFromEmbedded —
+// which reads widgets_values — walks straight past it, and an image plainly made
+// with a preset re-opens on "— none —".
+//
+// Recovering it needs no second detection pass and no copy of rgthree's group
+// geometry: the config already names every zone's nodes, and the image's own
+// graph says which of those nodes ran. Mode 0 is "runs"; the muter writes 2 on
+// each group it turns off, which is also what applyFieldConfigOverrides writes
+// when a run picks one.
+export function presetFromEmbedded(cfg, wfGraph) {
+  const presets = (cfg && cfg.presets) || [];
+  if (!presets.length || !wfGraph || !Array.isArray(wfGraph.nodes)) return '';
+  const mode = new Map();
+  for (const n of wfGraph.nodes) mode.set(String(n.id), n.mode || 0);
+  for (const p of presets) {
+    const z = (cfg.zones || []).find(z => z.title === p.title);
+    if (z && (z.nodes || []).some(id => mode.get(String(id)) === 0)) return p.title;
+  }
+  return '';
+}
+
 // ── The dialog ─────────────────────────────────────────────────────────────
 export default {
   name: 'RemixDialog',
@@ -851,6 +873,16 @@ export default {
           // When the source media carries this exact workflow, prefill every field
           // (loras, steps, cfg, size…) from the values it was actually generated with.
           if (meta.embeddedWf && wf.value === meta.matchedWf) prefillFromEmbedded(c.fields, meta.embeddedWf);
+          // …including the style preset, which lives in the graph's mute state
+          // rather than in a widget. Inherit read this image's own graph, so its
+          // config already says which preset was on; a named workflow was read
+          // off disk, where the group left un-muted is whatever the file was last
+          // saved with — not what made the image. A shortcut wins over both: the
+          // preset it carries was captured on purpose.
+          if (!c.selectedPreset) {
+            if (wf.value === '__inherit__') selectedPreset.value = ((c.presets || []).find(p => p.on) || {}).title || '';
+            else if (meta.embeddedWf && wf.value === meta.matchedWf) selectedPreset.value = presetFromEmbedded(c, meta.embeddedWf);
+          }
           cfg.fields = c.fields;
         }
       } catch (e) { cfg.error = String(e.message || e); }

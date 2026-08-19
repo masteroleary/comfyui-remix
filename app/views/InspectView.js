@@ -28,7 +28,7 @@ import { viewTo } from '../router.js';
 import MediaTile from '../components/MediaTile.js';
 // The run engine. It lives in RemixDialog for historical reasons (see the note
 // at the top of that file); what matters here is that there is exactly one.
-import { launchJob, cancelJob, jobs, link } from '../components/RemixDialog.js';
+import { launchJob, cancelJob, jobs, link, presetFromEmbedded } from '../components/RemixDialog.js';
 import ReplacementRules from '../components/ReplacementRules.js';
 import WorkflowFields from '../components/WorkflowFields.js';
 
@@ -65,6 +65,10 @@ const jobId = ref('');
 const fieldConfig = ref(null);
 const fieldCfgName = ref('');
 const selectedPreset = ref('');
+// The workflow this file was recognised as, which is the only one whose zones
+// the file's own graph can be read against — a workflow picked by hand shares
+// nothing with it, node ids included.
+const recognizedWf = ref('');
 // {nodeId: {input: value}} from the Nodes accordion, re-applied to each built
 // prompt by id.
 const nodeEdits = ref({});
@@ -89,7 +93,7 @@ function resetRunState(target, force) {
   tab.value = 'workflow';
   jobId.value = '';
   fieldConfig.value = null; fieldCfgName.value = '';
-  selectedPreset.value = ''; nodeEdits.value = {}; editedIds.value = new Set();
+  selectedPreset.value = ''; recognizedWf.value = ''; nodeEdits.value = {}; editedIds.value = new Set();
   outputSelected.value = new Set(); outputFaved.value = new Set();
 }
 
@@ -354,6 +358,7 @@ export default {
         if (wfName.value !== 'inherit') return false;                       // user picked something meanwhile
         if (!wfOptions.value.some(w => w.name === m.name)) return false;
         wfName.value = m.name;
+        recognizedWf.value = m.name;
         LS.set('archiveWorkflowSelect', m.name);
         await loadWorkflowConfig(m.name);
         log('Recognized saved workflow "' + (m.label || m.name) + '" (' + Math.round(m.score * 100) + '% match) — switched from Inherit');
@@ -518,6 +523,17 @@ export default {
         if (s != null && Number(s) >= 0) {
           const sf = fieldConfig.value.fields.find(f => f.kind === 'seed');
           if (sf) sf.value = s;
+        }
+        // The style preset is stated by the graph's mute state rather than by a
+        // widget, so it has to be read off the file's own graph: Inherit's config
+        // already is that graph, and a recognised workflow's config carries the
+        // zones its node ids belong to. Same call the Remix dialog makes, so the
+        // two surfaces open a file on the same preset.
+        const wfg = workflowData.value;
+        if (fieldCfgName.value === 'inherit') {
+          selectedPreset.value = ((fieldConfig.value.presets || []).find(p => p.on) || {}).title || '';
+        } else if (wfg && fieldCfgName.value && fieldCfgName.value === recognizedWf.value) {
+          selectedPreset.value = presetFromEmbedded(fieldConfig.value, wfg);
         }
       } catch {}
     }
