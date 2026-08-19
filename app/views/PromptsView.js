@@ -5,13 +5,17 @@
 // and reading the whole text, which is why the box grows to its content instead
 // of scrolling inside three rows.
 //
+// Each category is an expansion panel and every one of them loads shut, since a
+// page of boxes that all grow to their paragraphs is a page you have to scroll
+// past to find the category you came for.
+//
 // The list is the shared one from app/prompts.js, so a rule editor open in a
 // dialog sees an edit here the moment it is saved.
 import { showToast } from '../store.js';
 import { promptLib, loadPrompts, savePrompts, newPromptId } from '../prompts.js';
 import { autosize } from '../autosize.js';
 
-const { ref, computed, onMounted } = window.Vue;
+const { ref, reactive, computed, onMounted } = window.Vue;
 
 export default {
   name: 'PromptsView',
@@ -20,6 +24,12 @@ export default {
     const saving = ref(false);
     const newCat = ref('');
     const catOpen = ref(false);
+    // Every category loads collapsed: this page is a library, and what you want
+    // on arrival is the shelf list, not every prompt's text at once. Keyed by
+    // category name, so a renamed or re-filed group simply starts closed again
+    // rather than inheriting another one's state.
+    const openCats = reactive({});
+    function toggleCat(c) { openCats[c] = !openCats[c]; }
 
     onMounted(() => loadPrompts());
 
@@ -43,10 +53,13 @@ export default {
     }
 
     function addPrompt(category) {
+      const cat = category || promptLib.categories[0] || '';
+      // A new row inside a shut panel is a row nobody can type in.
+      openCats[cat] = true;
       promptLib.prompts.unshift({
         id: newPromptId(),
         name: '',
-        category: category || promptLib.categories[0] || '',
+        category: cat,
         text: '',
       });
     }
@@ -75,7 +88,7 @@ export default {
     }
 
     return {
-      lib: promptLib, groups, saving, newCat, catOpen,
+      lib: promptLib, groups, saving, newCat, catOpen, openCats, toggleCat,
       addPrompt, removePrompt, addCategory, removeCategory, persist,
     };
   },
@@ -112,23 +125,28 @@ export default {
         No prompts yet — ＋ Add writes the first one.
       </div>
 
-      <div v-for="g in groups" :key="g.category" class="pr-group">
-        <div class="pr-group-head">
+      <div v-for="g in groups" :key="g.category" class="pr-group" :class="{ open: openCats[g.category] }">
+        <div class="pr-group-head" role="button" tabindex="0" :aria-expanded="openCats[g.category] ? 'true' : 'false'"
+             @click="toggleCat(g.category)" @keydown.enter.prevent="toggleCat(g.category)" @keydown.space.prevent="toggleCat(g.category)">
+          <span class="pr-group-arrow">▾</span>
           <span class="pr-group-name">{{ g.category }}</span>
           <span class="rmx-mut">{{ g.prompts.length }}</span>
-          <button v-if="!g.orphan" class="btn-sm-add" :title="'Add a prompt to ' + g.category" @click="addPrompt(g.category)">＋</button>
+          <button v-if="!g.orphan" class="btn-sm-add" :title="'Add a prompt to ' + g.category" @click.stop="addPrompt(g.category)">＋</button>
         </div>
-        <div v-for="p in g.prompts" :key="p.id" class="pr-row">
-          <div class="pr-row-top">
-            <input class="pr-name" v-model="p.name" placeholder="Name — what the dropdown shows" @change="persist()">
-            <select class="pr-cat" v-model="p.category" @change="persist()">
-              <option v-for="c in lib.categories" :key="c" :value="c">{{ c }}</option>
-              <option v-if="g.orphan" :value="p.category">{{ p.category || '(none)' }}</option>
-            </select>
-            <button class="pr-del" title="Delete this prompt" @click="removePrompt(p)">🗑</button>
+        <div v-if="openCats[g.category]" class="pr-group-body">
+          <div v-if="!g.prompts.length" class="pr-group-empty">Nothing filed here yet.</div>
+          <div v-for="p in g.prompts" :key="p.id" class="pr-row">
+            <div class="pr-row-top">
+              <input class="pr-name" v-model="p.name" placeholder="Name — what the dropdown shows" @change="persist()">
+              <select class="pr-cat" v-model="p.category" @change="persist()">
+                <option v-for="c in lib.categories" :key="c" :value="c">{{ c }}</option>
+                <option v-if="g.orphan" :value="p.category">{{ p.category || '(none)' }}</option>
+              </select>
+              <button class="pr-del" title="Delete this prompt" @click="removePrompt(p)">🗑</button>
+            </div>
+            <textarea v-autosize class="pr-text" rows="2" v-model="p.text"
+                      placeholder="The text this prompt stands for" @change="persist()"></textarea>
           </div>
-          <textarea v-autosize class="pr-text" rows="2" v-model="p.text"
-                    placeholder="The text this prompt stands for" @change="persist()"></textarea>
         </div>
       </div>
     </div>

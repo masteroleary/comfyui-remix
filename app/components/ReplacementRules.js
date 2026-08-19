@@ -5,15 +5,17 @@
 //
 // A rule whose "find" is written as [keyword] is the reason the prompt library
 // exists: its replacement stops being free text and becomes a pick from the
-// library, grouped by category. [female] → Blonde Elf, [scene] → Forest. The
-// pick is stored as the prompt's id, so editing that prompt updates every rule
-// using it; the resolved text is written alongside so an older build (and the
-// server's own copy) still has something literal to substitute.
+// library — and only from the part of it the keyword names, since [female] is a
+// question and every prompt on file is not an answer to it. [female] → Blonde
+// Elf, [scene] → Forest. The pick is stored as the prompt's id, so editing that
+// prompt updates every rule using it; the resolved text is written alongside so
+// an older build (and the server's own copy) still has something literal to
+// substitute.
 import {
-  replacements, saveReplacements, replActiveCount, replAllOn, isKeywordRule,
+  replacements, saveReplacements, replActiveCount, replAllOn, isKeywordRule, keywordOf,
 } from '../replacements.js';
 import { applyReplacements } from '../replacements.js';
-import { promptLib, loadPrompts, promptsByCategory } from '../prompts.js';
+import { promptLib, loadPrompts, promptsMatching } from '../prompts.js';
 
 const { computed, onMounted } = window.Vue;
 
@@ -46,6 +48,14 @@ export default {
       r.to = p ? p.text : '';
       saveReplacements();
     }
+    // The picker offers the shelf the keyword names, not the whole library:
+    // [female] is a question, and answering it with every prompt on file is the
+    // same as not having asked. One computed for the whole list rather than a
+    // call per row, so a render walks the library once. A keyword nothing
+    // matches falls back to everything — see promptsMatching.
+    const promptOptions = computed(() => replacements.map(
+      r => (isKeywordRule(r) ? promptsMatching(keywordOf(r), r.promptId) : null)
+    ));
     // What the run will actually send: every enabled rule applied, then any
     // unclaimed [keyword] dropped. Shown rather than described, because the
     // difference between a rule that fired and one that quietly did not is
@@ -53,9 +63,9 @@ export default {
     const finalPrompt = computed(() => applyReplacements(props.prompt || ''));
     const changed = computed(() => finalPrompt.value !== (props.prompt || ''));
     return {
-      finalPrompt, changed,
+      finalPrompt, changed, promptOptions,
       replacements, saveReplacements, replActiveCount, replAllOn,
-      isKeywordRule, promptsByCategory, promptLib,
+      isKeywordRule, promptLib,
       addRepl, delRepl, swapRepl, toggleReplAll, pickPrompt,
     };
   },
@@ -78,8 +88,8 @@ export default {
           <!-- [keyword]: pick from the library instead of typing. -->
           <select v-if="isKeywordRule(r)" class="rmx-inp" :value="r.promptId || ''"
                   :title="r.to || 'Pick a prompt'" @change="pickPrompt(r, $event.target.value)">
-            <option value="">— pick a prompt —</option>
-            <optgroup v-for="g in promptsByCategory" :key="g.category" :label="g.category">
+            <option value="">{{ promptOptions[i].filtered ? '— pick a ' + promptOptions[i].keyword + ' prompt —' : '— pick a prompt —' }}</option>
+            <optgroup v-for="g in promptOptions[i].groups" :key="g.category" :label="g.category">
               <option v-for="p in g.prompts" :key="p.id" :value="p.id">{{ p.name || '(unnamed)' }}</option>
             </optgroup>
           </select>

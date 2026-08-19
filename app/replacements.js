@@ -93,6 +93,11 @@ export function applyReplacementsToNodes(prompt) {
 // braces belong to ComfyUI's dynamic prompts and this cannot tell the two apart.
 export const KEYWORD_RE = /^\s*[[{][^[\]{}|:]+[\]}]\s*$/;
 export const isKeywordRule = r => KEYWORD_RE.test(r && r.from ? r.from : '');
+// The word inside the brackets — what the rule is asking the library for.
+export const keywordOf = r => {
+  const s = r && r.from ? String(r.from).trim() : '';
+  return KEYWORD_RE.test(s) ? s.slice(1, -1).trim() : '';
+};
 
 // localStorage first so the editor is never empty for a beat, then the server.
 // A server with nothing and a local list that has something means this browser

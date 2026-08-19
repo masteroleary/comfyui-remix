@@ -52,6 +52,41 @@ export const promptsByCategory = computed(() => {
   return out.filter(g => g.prompts.length);
 });
 
+// ── Matching a keyword to the library ──────────────────────────────────────
+// A [keyword] rule's picker lists what the keyword asks for rather than the
+// whole library: [female] offers the Female shelf, [scene] the Scene one. The
+// category is what decides it — that is what a category is for here — and a
+// prompt's own name is the second chance, so a "Female Elf" filed under
+// Characters still turns up. Folding drops case, spaces, punctuation and a
+// trailing plural, because [scene] and a category called "Scenes" are the same
+// intent spelled twice.
+const foldKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '').replace(/s$/, '');
+
+export function promptsMatching(keyword, keepId) {
+  const all = promptsByCategory.value;
+  const k = foldKey(keyword);
+  if (!k) return { groups: all, filtered: false, keyword: '' };
+  const groups = all.map(g => {
+    const c = foldKey(g.category);
+    // A category the keyword names hands over its whole shelf. The reverse
+    // containment ([female-lead] finding "Female") needs a category long
+    // enough to mean something, or a two-letter one matches every keyword.
+    if (c && (c.includes(k) || (c.length >= 3 && k.includes(c)))) return g;
+    const prompts = g.prompts.filter(p => foldKey(p.name).includes(k));
+    return prompts.length ? { category: g.category, prompts } : null;
+  }).filter(Boolean);
+  // A keyword nothing answers to would leave an empty dropdown and no way out
+  // of it, so fall back to the whole library rather than to a dead end.
+  if (!groups.length) return { groups: all, filtered: false, keyword };
+  // Whatever is already picked stays pickable wherever it is filed, or a rule
+  // with a prompt behind it would render as though nothing were chosen.
+  if (keepId && !groups.some(g => g.prompts.some(p => p.id === keepId))) {
+    const p = promptLib.prompts.find(x => x.id === keepId);
+    if (p) groups.push({ category: (p.category || 'Uncategorised') + ' (picked)', prompts: [p] });
+  }
+  return { groups, filtered: true, keyword };
+}
+
 // What a [keyword] rule substitutes: the prompt's text, found by id.
 export const promptTextById = id => {
   const p = promptLib.prompts.find(x => x.id === id);
