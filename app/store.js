@@ -13,6 +13,11 @@ const num = (v, fallback) => { const n = parseInt(v, 10); return Number.isFinite
 const readLs = (k, fallback) => { try { const v = localStorage.getItem(k); return v == null ? fallback : v; } catch { return fallback; } };
 const writeLs = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
+// The tile sizes the browse grid offers. Exported so the control that switches
+// them and the guard that validates a stored one read the same list — a fourth
+// size added here shows up in the switch without being named twice.
+export const THUMB_SIZES = ['m', 'l', 'xl'];
+
 // Slideshow cadence, slowest → fastest; ‹ › become − + while playing.
 export const SLIDE_STEPS = [8000, 5000, 3000, 2000, 1500, 1000, 700, 500];
 export const TYPES = [
@@ -56,6 +61,10 @@ export const store = reactive({
   // ── Chrome ──
   blurOn: readLs('archiveBlur', '1') === '1',
   safeOn: readLs('archiveSafe', '1') === '1',
+  // How big the browse grid draws its tiles. Read back through the allowed set
+  // rather than trusted: it comes out of localStorage, and an unknown value
+  // would land as a class nothing styles — a grid of zero-width tiles.
+  thumbSize: THUMB_SIZES.includes(readLs('archiveThumbSize', 'm')) ? readLs('archiveThumbSize', 'm') : 'm',
   filtersOpen: false,
   toast: { text: '', until: 0 },
 
@@ -79,6 +88,10 @@ export const store = reactive({
 // Persisted chrome. Written here rather than at every call site that flips them.
 export function setBlur(on) { store.blurOn = !!on; writeLs('archiveBlur', on ? '1' : '0'); }
 export function setSafe(on) { store.safeOn = !!on; writeLs('archiveSafe', on ? '1' : '0'); }
+export function setThumbSize(s) {
+  if (!THUMB_SIZES.includes(s)) return;
+  store.thumbSize = s; writeLs('archiveThumbSize', s);
+}
 
 // ── Reload hook ─────────────────────────────────────────────────────────────
 // After a mutation — favourite, delete, move, merge — the route is unchanged, so

@@ -133,7 +133,7 @@ export default {
     return { store, open, openRemix };
   },
   template: `
-    <div class="browse" :class="{ 'blur-on': store.blurOn }">
+    <div class="browse" :class="['tiles-' + store.thumbSize, { 'blur-on': store.blurOn }]">
       <div v-if="store.loading" class="loading"><div class="spinner"></div> Loading…</div>
       <div v-else-if="store.error" class="loading">{{ store.error }}</div>
       <div v-else-if="!store.items.length" class="loading">Nothing here.</div>

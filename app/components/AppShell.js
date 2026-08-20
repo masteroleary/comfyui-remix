@@ -113,7 +113,9 @@ export default {
         </svg>
       </button>
 
-      <Pager v-if="isBrowse" />
+      <!-- The top page strip moved into the toolbar's switch bar, where it sits
+           between the root and tile-size switches. The copy below the grid stays:
+           it is the one you reach after scrolling a page of results. -->
       <router-view v-slot="{ Component }">
         <suspense>
           <component :is="Component" />

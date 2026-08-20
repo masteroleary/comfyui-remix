@@ -50,9 +50,26 @@
 html.auth-on .shell-settings{right:56px}
 
 /* ── Grid (browse) ────────────────────────────────────────────────────────── */
+/* The column track is a variable so the toolbar's M/L/XL switch can resize the
+   grid without re-listing or re-fetching a thing: auto-fill just recomputes how
+   many columns fit. The thumbnails were always served at their own resolution
+   and scaled to the tile, so a bigger tile is a bigger draw, not a new request.
+   The floor is on .browse rather than .grid so a size class set on the page
+   wrapper reaches it. */
+.browse{--tile:150px}
+.browse.tiles-m{--tile:150px}
+.browse.tiles-l{--tile:220px}
+.browse.tiles-xl{--tile:300px}
 .grid{
   display:grid;gap:10px;padding:12px;
-  grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+  grid-template-columns:repeat(auto-fill,minmax(var(--tile),1fr));
+}
+/* Below the largest tile's own width there is no choice to make: one column is
+   one column, and honouring XL would mean a track wider than the viewport and a
+   horizontal scrollbar. Each size class is named because they are two-class
+   selectors — a bare `.browse` here would lose to every one of them. */
+@media (max-width:340px){
+  .browse,.browse.tiles-m,.browse.tiles-l,.browse.tiles-xl{--tile:120px}
 }
 /* The tile is a square thumbnail flush to its own edges with an info bar under
    it — the shape the pre-SPA card had. The card carries no padding for exactly

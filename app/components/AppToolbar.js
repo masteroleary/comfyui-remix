@@ -13,11 +13,13 @@
 //
 // Renders on browse routes only; the shell decides where it goes.
 import {
-  store, TYPES, setBlur, setSafe, showToast, clearSelection, exitMultiSelect,
+  store, TYPES, THUMB_SIZES, setBlur, setSafe, setThumbSize, showToast,
+  clearSelection, exitMultiSelect,
   crumbs, sortLabel, filterCount, selectedCount, onHome,
 } from '../store.js';
 import { api } from '../api.js';
 import { browseQuery, browseTo, splitRoot, joinRoot } from '../router.js';
+import Pager from './Pager.js';
 
 const { ref, computed, watch, onMounted, onBeforeUnmount } = window.Vue;
 const { useRoute, useRouter } = window.VueRouter;
@@ -39,6 +41,10 @@ const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'bas
 
 export default {
   name: 'AppToolbar',
+  // The page strip rides in the switch row rather than on its own line above the
+  // grid. Same component as the copy under the grid — it reads store.page /
+  // store.pages, so the two stay in step with nothing shared between them.
+  components: { Pager },
   // Bulk actions run in dialogs the toolbar does not own. Move, Merge and
   // Settings have somewhere to go already — store.ui is the shared registry of
   // which overlay is up, and those dialogs read the selection themselves — so
@@ -171,6 +177,17 @@ export default {
       if (!t.active) go({ dir: t.dir, search: '', flatten: false });
     }
 
+    // ── Tile size ───────────────────────────────────────────────────────────
+    // Purely a display preference: it changes a CSS custom property the grid's
+    // column track reads, so nothing re-fetches and no thumbnail is re-requested
+    // at a new size — the images were always served at their own resolution and
+    // scaled to the tile. Labels come from THUMB_SIZES so the switch cannot
+    // offer a size the store would refuse to save.
+    const TILE_TITLES = { m: 'Medium tiles', l: 'Large tiles', xl: 'Extra large tiles' };
+    const tileSizes = computed(() => THUMB_SIZES.map(id => ({
+      id, label: id.toUpperCase(), title: TILE_TITLES[id] || id,
+    })));
+
     // ── Stats ───────────────────────────────────────────────────────────────
     const stats = computed(() => store.total + ' item' + (store.total !== 1 ? 's' : ''));
     const pageInfo = computed(() => (store.pages > 1 ? 'Page ' + store.page + ' / ' + store.pages : ''));
@@ -272,7 +289,7 @@ export default {
       back, backDisabled, goHome, toggleBlur, toggleSafe,
       q, locked, nfName, unlock, onSearchInput, commitSearch, clearSearch,
       cycleSort, toggleFilters, setType, toggleFlatten,
-      fileTabs, showFileTabs, clickTab, stats, pageInfo,
+      fileTabs, showFileTabs, clickTab, tileSizes, setThumbSize, stats, pageInfo,
       toggleSelect, bulkSelAll, bulkSelFiles, bulk,
       bulkDirCount, bulkFileCount, bulkVideoCount,
       words, wordFilter, wordList, openWords, closeWords, pickWord,
@@ -382,9 +399,29 @@ export default {
         </div>
       </div><!-- /.hdr-stack -->
 
-      <!-- Which media root you are in; hidden while searching -->
-      <div class="file-tabs" v-show="showFileTabs">
-        <button v-for="t in fileTabs" :key="t.id" class="file-tab" :class="{active: t.active}" @click="clickTab(t)">{{ t.label }}</button>
+      <!-- One bar: which media root you are in, the page strip, and how big the
+           grid draws its tiles. Both switches are the segmented control the
+           inspect page and the Remix dialog use for Workflow / Run / Preview —
+           one style for "pick one of these", wherever it appears.
+
+           Each of the three can vanish on its own, which is why the outer two
+           cells are wrappers rather than the controls themselves. The root
+           switch is hidden while searching (results cross both roots, so
+           neither is the answer), and the pager renders nothing at all on a
+           single-page folder. A grid item that is display:none — or absent — is
+           not laid out, so without the wrappers the remaining controls would
+           slide up a column and the "centre" would stop being the centre. -->
+      <div class="browse-switch">
+        <div class="bs-side">
+          <div class="rmx-tabs" v-show="showFileTabs">
+            <button v-for="t in fileTabs" :key="t.id" :class="{on: t.active}" @click="clickTab(t)">{{ t.label }}</button>
+          </div>
+        </div>
+        <div class="bs-mid"><Pager /></div>
+        <div class="rmx-tabs tile-switch">
+          <button v-for="s in tileSizes" :key="s.id" :class="{on: store.thumbSize === s.id}"
+                  :title="s.title" @click="setThumbSize(s.id)">{{ s.label }}</button>
+        </div>
       </div>
 
       <div class="stats"><span>{{ stats }}</span><span>{{ pageInfo }}</span></div>
