@@ -149,7 +149,7 @@ html.auth-on .shell-settings{right:56px}
   display:flex;align-items:center;justify-content:center;
   width:32px;height:32px;flex:none;border-radius:var(--r-sm);
   background:var(--surface);border:1px solid var(--border);
-  color:var(--text);text-decoration:none;font-size:16px;
+  color:var(--text);text-decoration:none;font:inherit;font-size:16px;cursor:pointer;
 }
 .wf-title{font-size:20px;font-weight:600}
 .wf-add{
@@ -201,6 +201,18 @@ html.auth-on .shell-settings{right:56px}
 .wf-row-label{font-size:15px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wf-row-sub{font-size:12px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wf-row-go{flex:none;font-size:18px;color:var(--text3)}
+
+/* ── Jobs (the run list, as a page) ───────────────────────────────────────── */
+/* Shares the Workflows page frame; the rows keep every rule they had in the
+   dialog (app/styles/remix.css). Two of those rules were the dialog's, not the
+   list's: .rmx-jobs scrolled inside a fixed-height box, which on a page would
+   put the scroll position somewhere the router cannot save or restore — and
+   restoring it is the whole reason Jobs is a route. Let the page scroll. */
+.jobs-page{max-width:860px}
+.jobs-page .rmx-jobs{padding:0;overflow:visible;max-height:none}
+/* .rmx-clear is a dialog-header button; here it takes .wf-add's place at the end
+   of the row. */
+.jobs-page .rmx-clear{margin-left:auto}
 
 /* ── Prompts ──────────────────────────────────────────────────────────────── */
 /* Shares the Workflows page frame (.wf-page/.wf-head); only the rows differ. */

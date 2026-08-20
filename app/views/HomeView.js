@@ -27,12 +27,8 @@ export default {
         out.push({ key: 'output', icon: '🎨', label: 'ComfyUI Output', sub: 'Fresh from the queue',
                    to: browseTo({ dir: roots.value.out }, null, roots.value) });
       }
-      // Settings is a shell panel rather than a route, so this tile raises the
-      // same panel the toolbar's ⚙ does. The shell already puts a ⚙ on Home, but
-      // it is a 36px icon in the corner — easy to miss on a phone, and Home is
-      // exactly where a fresh install lands needing the media root set.
       out.push({ key: 'jobs', icon: '⚡', label: 'Jobs', sub: 'Running and completed runs',
-                 action: () => { store.ui.remix = null; store.ui.jobs = true; } });
+                 to: { name: 'jobs' } });
       out.push({ key: 'workflows', icon: '🧩', label: 'Workflows', sub: 'The library Remix runs from',
                  to: { name: 'workflows' } });
       out.push({ key: 'prompts', icon: '📝', label: 'Prompts', sub: 'Reusable text for [keyword] rules',

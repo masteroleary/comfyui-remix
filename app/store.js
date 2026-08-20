@@ -77,7 +77,8 @@ export const store = reactive({
     merge: false,
     picker: false,
     remix: null,            // the item being remixed, or null
-    jobs: false,            // Jobs dialog; shares a z-index with remix, so only one is up
+    // No `jobs` here: the run list is the /jobs route, not a dialog. It was one
+    // until opening an output — a navigation — tore it down and lost your place.
   },
 
   // ── Session ──

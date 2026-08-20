@@ -32,6 +32,12 @@ export const routes = [
   // Reusable prompt text, filed by category. A page rather than a dialog for the
   // same reason the library is: it belongs to the install, not to a file.
   { path: '/prompts', name: 'prompts', component: () => import('./views/PromptsView.js') },
+  // The run list. A route rather than the dialog it used to be, because opening
+  // one of a job's outputs is a navigation: as a dialog it was torn down on the
+  // way to the viewer, and closing the viewer came back to the route underneath
+  // with the list gone and its scroll position with it. A route makes the round
+  // trip ordinary history, and scrollBehavior below restores the place.
+  { path: '/jobs', name: 'jobs', component: () => import('./views/JobsView.js') },
   // Settings is routed rather than modal, so each section is linkable and
   // survives a reload. Both paths load the one view: bare = the section menu.
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.js') },

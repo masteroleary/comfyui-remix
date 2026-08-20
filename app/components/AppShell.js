@@ -7,7 +7,6 @@ import { store, showToast, reload, setBlur, exitMultiSelect } from '../store.js'
 import { api } from '../api.js';
 import AppToolbar from './AppToolbar.js';
 import Pager from './Pager.js';
-import JobsDialog from './JobsDialog.js';
 import { runningCount, leadPct } from './RemixDialog.js';
 import MoveDialog from './MoveDialog.js';
 import MergeDialog from './MergeDialog.js';
@@ -17,18 +16,20 @@ const { computed, onMounted, onUnmounted, ref, defineAsyncComponent } = window.V
 // The remix dialog pulls in the ComfyUI job engine on import, so it loads on
 // first use rather than on every page load.
 const RemixDialog = defineAsyncComponent(() => import('./RemixDialog.js'));
-const { useRoute } = window.VueRouter;
+const { useRoute, useRouter } = window.VueRouter;
 
 export default {
   name: 'AppShell',
-  components: { AppToolbar, Pager, MoveDialog, MergeDialog, RemixDialog, JobsDialog },
+  components: { AppToolbar, Pager, MoveDialog, MergeDialog, RemixDialog },
   setup() {
     const route = useRoute();
+    const router = useRouter();
     const isBrowse = computed(() => route.name === 'browse');
     const isHome = computed(() => route.name === 'home');
+    const isJobs = computed(() => route.name === 'jobs');
     // Anything that takes the screen: the shell's own dialogs, and the viewer,
     // which is a route rather than an overlay but reads as one.
-    const overlayUp = computed(() => !!(store.ui.remix || store.ui.jobs || store.ui.move
+    const overlayUp = computed(() => !!(store.ui.remix || store.ui.move
       || store.ui.merge || confirmBox.value || route.name === 'view'));
     const confirmBox = ref(null);   // { title, body, ok, run } or null
 
@@ -86,10 +87,11 @@ export default {
       await reload();
     }
 
-    // Remix and Jobs share z-index 3000, so raising one lowers the other.
-    const openJobs = () => { store.ui.remix = null; store.ui.jobs = true; };
+    // Jobs is a route now, so the badge navigates. Remix is still an overlay and
+    // would sit on top of the page it takes you to, so it comes down first.
+    const openJobs = () => { store.ui.remix = null; router.push({ name: 'jobs' }); };
 
-    return { store, isBrowse, isHome, overlayUp, logout, onBulk, confirmBox, afterMutation,
+    return { store, isBrowse, isHome, isJobs, overlayUp, logout, onBulk, confirmBox, afterMutation,
              runningCount, leadPct, openJobs };
   },
   template: `
@@ -135,16 +137,16 @@ export default {
            taken the screen. They live in the shell because a job outlives the
            dialog that started it and any route it was started from — but a
            dialog is not a page, and floating chrome over one lands on its own
-           controls. -->
-      <div v-if="runningCount > 0 && !overlayUp" class="rmx-topbar"
+           controls. Hidden on /jobs too: there the badge would point at the page
+           it is already sitting on, and the list shows the same progress. -->
+      <div v-if="runningCount > 0 && !overlayUp && !isJobs" class="rmx-topbar"
            :title="runningCount + ' job(s) running — click for Jobs'" @click="openJobs">
         <div class="rmx-topbar-fill" :class="{ indet: leadPct === 0 }"
              :style="leadPct > 0 ? { width: leadPct + '%' } : {}"></div>
       </div>
-      <button v-if="runningCount > 0 && !overlayUp" class="rmx-fab" title="Running jobs"
+      <button v-if="runningCount > 0 && !overlayUp && !isJobs" class="rmx-fab" title="Running jobs"
               @click="openJobs">⚡ {{ runningCount }}</button>
 
-      <JobsDialog v-if="store.ui.jobs" />
       <MoveDialog :open="store.ui.move" @close="store.ui.move = false" @done="afterMutation" />
       <MergeDialog :open="store.ui.merge" @close="store.ui.merge = false" @done="afterMutation" />
       <RemixDialog v-if="store.ui.remix" :item="store.ui.remix" :key="store.ui.remix.path"

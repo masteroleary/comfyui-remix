@@ -1986,7 +1986,6 @@ const server = http.createServer((req, res) => {
     res.setHeader('Expires', '0');
     serveFile(path.join(__dirname, 'index.html'), req, res); return;
   }
-  // Serve jobs page
   // Shared static assets (explicit allowlist — no generic file serving)
   if ((pn === '/common.css' || pn === '/app.css' || pn === '/ui-guards.js' || pn === '/auth-ui.js'
        || pn === '/logo-home.webp') && req.method === 'GET') {

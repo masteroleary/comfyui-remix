@@ -30,6 +30,7 @@ allowlisted by shape (`.js`/`.css`, one directory deep).
 
 `/` home · `/browse/:root/:path*` grid · `/view/:root/:path+` viewer ·
 `/inspect` a file **or** a workflow · `/workflows` the library ·
+`/prompts` the reusable text · `/jobs` the run list ·
 `/settings` and `/settings/:tab` (config | privacy | security).
 
 `/inspect` takes either `?path=…` (a file) or `?wf=<name>` (a workflow with no
@@ -66,9 +67,18 @@ usually the same bug: something the host provided instead of the component.
 The run engine lives in **`components/RemixDialog.js`**, not in anything named
 after jobs: it owns the reactive `jobs` store, IndexedDB persistence, the
 leader-elected ComfyUI socket and the reconciler, and it runs because `AppShell`
-imports it eagerly. **`components/JobsDialog.js` is a view only** and owns no
-state. The progress hairline and the `⚡ N` badge live in `AppShell`, since a job
-outlives both the dialog that started it and the route it started from.
+imports it eagerly. **`views/JobsView.js` is a view only** and owns no state. The
+progress hairline and the `⚡ N` badge live in `AppShell`, since a job outlives
+both the dialog that started it and the route it started from.
+
+The run list is **the `/jobs` route, not a dialog**. It was a dialog until
+opening one of a job's outputs proved the difference: the viewer is a route, so
+raising it tore the dialog down, and closing the viewer landed on whatever route
+was underneath with the list gone and its scroll position with it. As a route
+the trip is ordinary history — `/jobs` → `/view/…` → back — and the router's
+`scrollBehavior` hands the saved position back. Which is also why the page lets
+the *page* scroll (`app.css` unsets `.rmx-jobs`'s inner scroller): a position
+inside a fixed-height box is one the router can neither save nor restore.
 
 **Everything that runs goes through `launchJob`** — the inspect page included.
 It used to run its own socket, uploader and output poller inside a component,
