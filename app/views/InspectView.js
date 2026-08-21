@@ -31,6 +31,7 @@ import MediaTile from '../components/MediaTile.js';
 import { launchJob, cancelJob, jobs, link, presetFromEmbedded, outputItems, forgetOutput } from '../components/RemixDialog.js';
 import ReplacementRules from '../components/ReplacementRules.js';
 import WorkflowFields from '../components/WorkflowFields.js';
+import { replacementVariations, replacementGroups, replacementText, applyReplacements } from '../replacements.js';
 
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = window.Vue;
 const { useRoute, useRouter } = window.VueRouter;
@@ -705,7 +706,19 @@ export default {
         ? { width: cfgNow.matchSize.width, height: cfgNow.matchSize.height, from: (mediaFields[0] && mediaFields[0].value) || '' }
         : null;
 
-      const newJobId = launchJob({
+      // Several enabled rules for one keyword are variations of each other, so
+      // a run queues one job per combination — the same fan-out the dialog does,
+      // through the same engine. A rules editor that multiplied the queue on one
+      // surface and quietly picked the first rule on the other is the drift this
+      // page keeps being the victim of.
+      const variations = replacementVariations();
+      const multi = new Set(replacementGroups().filter(g => g.rules.length > 1).map(g => g.key));
+      const labelFor = (v, n) => (variations.length < 2 ? '' :
+        '#' + (n + 1) + '/' + variations.length + ' · ' + v
+          .filter(r => multi.has(String(r.from).trim().toLowerCase()))
+          .map(r => r.from + ' → ' + String(replacementText(r)).replace(/s+/g, ' ').trim().slice(0, 28))
+          .join(' · '));
+      const jobParams = {
         workflowFile: inherit ? '__inherit__' : wfName.value,
         workflowLabel: inherit ? 'Inherited' : wfName.value.replace(/^APP /, '').replace(/\.json$/, ''),
         embeddedWf: inherit ? graph : null,
@@ -715,12 +728,22 @@ export default {
         fieldValues: collectFieldValues(selectedPreset.value || null),
         mediaFields,
         matchSize,
-        promptText: pf ? String(pf.value == null ? '' : pf.value) : '',
         loras: loras.length ? loras : null,
         preset: selectedPreset.value || '',
         seedPinned: fieldsSeedPinnedNow(),
         nodeEdits: nodeEdits.value,
         runs: parseInt(runCount.value, 10) || 1,
+      };
+      let newJobId = null;
+      variations.forEach((v, n) => {
+        const id = launchJob(Object.assign({}, jobParams, {
+          replacementRules: v,
+          variationLabel: labelFor(v, n),
+          // The record shows the prompt this job actually sends, so it is built
+          // from that job's variation rather than once from the whole list.
+          promptText: pf ? applyReplacements(String(pf.value == null ? '' : pf.value), v) : '',
+        }));
+        if (!newJobId) newJobId = id;
       });
       jobId.value = typeof newJobId === 'string' ? newJobId : ((jobs.list[0] && jobs.list[0].id) || '');
       outputSelected.value = new Set();

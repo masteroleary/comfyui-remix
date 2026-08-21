@@ -22,7 +22,8 @@ import MediaToolsMenu from './MediaToolsMenu.js';
 import MediaTile from './MediaTile.js';
 import WorkflowFields, { ctype, shortLora, canonLora, loraWords } from './WorkflowFields.js';
 import ReplacementRules from './ReplacementRules.js';
-import { activeReplacements, applyReplacements, applyReplacementsToNodes, loadReplacements } from '../replacements.js';
+import { activeReplacements, applyReplacements, applyReplacementsToNodes, loadReplacements,
+  replacementGroups, replacementVariations, replacementText } from '../replacements.js';
 import { viewTo } from '../router.js';
 
 const { reactive, ref, computed, watch, onMounted, onUnmounted, provide, inject } = window.Vue;
@@ -523,6 +524,10 @@ export function launchJob(p) {
   const id = 'job-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
   const job = reactive({
     id, workflow: p.workflowLabel, workflowFile: p.workflowFile,
+    // Which of the prompt variations this job is, when there is more than one.
+    // Persisted: a row that says nothing about it is indistinguishable from its
+    // siblings in the Jobs list, which is where they all land.
+    variation: p.variationLabel || null,
     prompt: (p.promptText || '').slice(0, 200), fullPrompt: p.promptText || '', loras: p.loras || null,
     // displaySource re-points only the row/thumbnail (a batch job shows the file it
     // feeds in); p.source still drives the upload and the graph.
@@ -598,7 +603,16 @@ export function launchJob(p) {
     (data.fieldWarnings || []).forEach(w => log('field: ' + w, 'warn'));
     const graph = data.workflow || null; const prompt = data.prompt || data;
     // Prompt Replacements: rewrite prompt-ish text across the built graph.
-    if (activeReplacements().length) { applyReplacementsToNodes(prompt); log('Applied ' + activeReplacements().length + ' prompt replacement(s)'); }
+    // The rules this job runs. A job is one variation — several enabled rules
+    // for the same keyword are alternatives, not a queue — so the list arrives
+    // already narrowed to one choice per keyword. Without one (an older record
+    // replayed, a caller that has not been taught) every enabled rule runs,
+    // which is what used to happen.
+    const replRules = p.replacementRules || activeReplacements();
+    if (replRules.length) {
+      applyReplacementsToNodes(prompt, replRules);
+      log('Applied ' + replRules.length + ' prompt replacement(s)' + (p.variationLabel ? ' · ' + p.variationLabel : ''));
+    }
     // Danger-zone node edits: apply by node id + key when the built graph has them.
     if (p.nodeEdits) { let n = 0; for (const [nid, kv] of Object.entries(p.nodeEdits)) { const node = prompt[nid]; if (node && node.inputs) for (const [k, val] of Object.entries(kv)) { node.inputs[k] = val; n++; } } if (n) log('Applied ' + n + ' node edit(s)'); }
     // Point the workflow's MAIN IMAGE loader at the source media we just uploaded —
@@ -1227,7 +1241,27 @@ export default {
         : null);
       const runs = parseInt(runCount.value, 10) || 1;
       const s = src.value;
+      // Several enabled rules for one keyword are alternatives, so the run fans
+      // out over them: one job per combination, and with a multi-file pick as
+      // well, one per file per combination. Naming each job by the choices it
+      // carries is what makes a screen of them tell you anything.
+      const variations = replacementVariations();
+      // Only the keywords with something to choose between get named: a label
+      // repeating every rule in the list would be the same on every job.
+      const multi = new Set(replacementGroups().filter(g => g.rules.length > 1).map(g => g.key));
+      const labelFor = (v, n) => (variations.length < 2 ? '' :
+        '#' + (n + 1) + '/' + variations.length + ' · ' + v
+          .filter(r => multi.has(String(r.from).trim().toLowerCase()))
+          .map(r => r.from + ' → ' + String(replacementText(r)).replace(/s+/g, ' ').trim().slice(0, 28))
+          .join(' · '));
       const base = { workflowFile: wf.value, workflowLabel: label, embeddedWf: inherit ? meta.embeddedWf : null, source: { path: s.path, name: s.name, type: s.type }, promptText: pf ? applyReplacements(pf.value) : '', loras: loras.length ? loras : null, preset: selectedPreset.value, seedPinned, nodeEdits: edits, runs, matchSize: matchSizeFor(mediaFields[0] && mediaFields[0].value) };
+      // The prompt the job record shows is the one that job actually sends, so
+      // it is built per variation rather than once from the whole rule list.
+      const launch = (extra, v, n) => launchJob(Object.assign({}, base, extra, {
+        replacementRules: v,
+        variationLabel: labelFor(v, n),
+        promptText: pf ? applyReplacements(pf.value, v) : '',
+      }));
       // A multi-file pick fans out: one job per file, each doing `runs` runs. The
       // source stays the media this dialog was opened from (it's what the graph is
       // built around); displaySource only re-points the job's row/thumbnail at the
@@ -1238,16 +1272,23 @@ export default {
         for (const file of bf.values) {
           const fv = Object.assign({}, collectFieldValues(), { [bf.id]: file });
           const mf = mediaFields.filter(m => m.id !== bf.id).concat([{ id: bf.id, value: file, type: 'image' }]);
-          const id = launchJob(Object.assign({}, base, {
-            fieldValues: fv, mediaFields: mf, matchSize: matchSizeFor(file),
-            displaySource: { path: file, name: String(file).split(/[\\/]/).pop() },
-          }));
-          if (!firstId) firstId = id;
+          variations.forEach((v, n) => {
+            const id = launch({
+              fieldValues: fv, mediaFields: mf, matchSize: matchSizeFor(file),
+              displaySource: { path: file, name: String(file).split(/[\\/]/).pop() },
+            }, v, n);
+            if (!firstId) firstId = id;
+          });
         }
         startedId.value = firstId;
         return;
       }
-      startedId.value = launchJob(Object.assign({}, base, { fieldValues: collectFieldValues(), mediaFields }));
+      let firstId = null;
+      variations.forEach((v, n) => {
+        const id = launch({ fieldValues: collectFieldValues(), mediaFields }, v, n);
+        if (!firstId) firstId = id;
+      });
+      startedId.value = firstId;
     }
     function close() { emit('close'); }
     // An output is a media file like any other, so its tile does what a tile in
@@ -1395,12 +1436,27 @@ export default {
       wfLib.busy = false;
     }
 
+    // Several enabled rules for one keyword multiply the run out. It is the
+    // kind of thing that is obvious once and expensive to rediscover at run 48,
+    // so the number is stated before the button rather than after it.
+    const variationWarn = computed(() => {
+      const groups = replacementGroups().filter(g => g.rules.length > 1);
+      if (!groups.length) return null;
+      const variations = groups.reduce((n, g) => n * g.rules.length, 1);
+      const jobs = Math.max(1, batchCount.value);
+      const names = groups.map(g => g.label);
+      const list = names.length === 1 ? names[0]
+        : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+      return { list, variations, jobs, total: jobs * variations,
+               runs: jobs * variations * (parseInt(runCount.value, 10) || 1) };
+    });
+
     // The prompt the rules will rewrite, for the editor to preview.
     const promptFieldText = computed(() => {
       const f = (cfg.fields || []).find(x => x.kind === 'prompt' && x.enabled && !x.variant);
       return f && f.value != null ? String(f.value) : '';
     });
-    return { promptFieldText, promptChoice, pickWorkflow, resolvePromptChoice,
+    return { promptFieldText, promptChoice, pickWorkflow, resolvePromptChoice, variationWarn,
       store, src, tab, runCount, batchCount, workflows, wf, wfGroups, cfg, selectedPreset, scSaving, scSaved, canShortcut, shortcutHint, saveShortcut, deleteShortcut, isShortcut, currentWfLabel, currentWfShort,
       canUpdateWf, wfUpdating, wfUpdated, updateWorkflow, meta, job, isVideo, mediaUrl, toolsMenu, toolItem, remix, cancelJob, close, saveMsg, nodeFilter, saveLog, filteredNodes, nodeInputs,
       nodeEdits, editVal, setEdit,
@@ -1507,11 +1563,17 @@ export default {
           </div>
           <!-- Run tab: run count, remix, status, log, and output thumbnails -->
           <div class="rmx-runsec" v-show="tab==='run'">
+            <div v-if="variationWarn" class="rmx-varwarn">
+              You have multiple variations enabled for <b>{{ variationWarn.list }}</b>.
+              This will multiply {{ variationWarn.jobs }} job{{ variationWarn.jobs === 1 ? '' : 's' }}
+              by {{ variationWarn.variations }} variations, resulting in
+              <b>{{ variationWarn.total }} jobs</b> ({{ variationWarn.runs }} runs).
+            </div>
             <div class="rmx-run">
               <select class="rmx-inp" v-model="runCount" style="width:70px" title="Number of runs"><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option><option value="5">5×</option><option value="10">10×</option><option value="20">20×</option></select>
               <button v-if="!job || job.status!=='running'" class="rmx-btn go" @click="remix" :disabled="!wf">▶ Remix</button>
               <button v-else class="rmx-btn cancel" @click="cancelJob(job)">■ Cancel</button>
-              <span v-if="batchCount" class="rmx-mut" style="font-size:12px" :title="batchCount + ' selected files × ' + runCount + ' runs'">{{ batchCount }} files → {{ batchCount }} jobs, {{ batchCount * (parseInt(runCount,10)||1) }} runs total</span>
+              <span v-if="batchCount" class="rmx-mut" style="font-size:12px" :title="batchCount + ' selected files × ' + runCount + ' runs'">{{ batchCount }} files → {{ batchCount * (variationWarn ? variationWarn.variations : 1) }} jobs, {{ batchCount * (variationWarn ? variationWarn.variations : 1) * (parseInt(runCount,10)||1) }} runs total</span>
               <span class="rmx-status" v-if="job">{{ job.status==='running' ? (job._node||'…') : (job._node || job.status) }}</span>
               <span class="rmx-status" v-else>close this anytime — runs keep going in Jobs</span>
             </div>

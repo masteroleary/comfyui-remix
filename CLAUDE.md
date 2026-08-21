@@ -140,6 +140,20 @@ load-bearing:
   against `applyReplacements` and returns `null` on any disagreement; the editor
   then shows the plain string. The tidy-up steps live in one `STRIP_STEPS` table
   both walks read, for the same reason.
+- **Several enabled rules for one keyword are variations, not a queue.** The
+  first used to win and the rest silently did nothing — by the time the second
+  looked, the token had already been replaced. Now `replacementVariations()`
+  returns every combination as a complete rule list, and a run queues one job
+  per combination (times the files in a multi-file pick). Order inside a list
+  stays the order the rules were typed, because a free-text rule can rewrite
+  what an earlier one produced. The Run tab states the multiplication in red
+  before the button, since finding it out at job 48 is the failure that warning
+  exists to prevent.
+- **The list is sorted for reading, never for running.** Rows render through a
+  sorted view carrying each rule's real index; the stored array keeps the order
+  it was typed in, which is the order it executes in. Alphabetical puts a
+  keyword's variations next to each other, and a row with nothing typed yet
+  sorts last so a new one does not jump away from the button that made it.
 - **The find box offers the keywords rather than asking you to remember them** —
   the ones this prompt actually contains first, since only a rule for one of
   those changes this run, then the library's categories and any keyword another

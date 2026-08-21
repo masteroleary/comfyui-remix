@@ -30,6 +30,48 @@ export const replActiveCount = computed(() => activeReplacements().length);
 export const replAllOn = computed(() => replacements.length > 0 && replacements.every(r => r.on));
 
 const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// ── Variations ────────────────────────────────────────────────────────────
+// Two enabled rules that find the same thing used to mean the first one won and
+// the second silently did nothing: by the time it looked, the token it wanted
+// had already been replaced. That is a trap — the row is ticked, it sits in the
+// list, and it changes nothing — so they are variations instead. Each group
+// contributes one choice to a run, and the caller queues a job per combination.
+//
+// Grouped on the folded `from`, because that is what "the same rule" means to
+// the substitution: matching is case-insensitive, so [Female] and [female] are
+// one group and would otherwise both fire on the same token.
+export function replacementGroups() {
+  const groups = new Map();
+  for (const r of activeReplacements()) {
+    const k = String(r.from).trim().toLowerCase();
+    if (!groups.has(k)) groups.set(k, { key: k, label: String(r.from).trim(), rules: [] });
+    groups.get(k).rules.push(r);
+  }
+  return [...groups.values()];
+}
+// Every combination, each a complete rule list. Order inside a list is the order
+// the rules were typed, not the order the grouping happened to visit them:
+// applyReplacements walks a list in sequence and a free-text rule can rewrite
+// what an earlier one produced, so regrouping must not quietly reorder them.
+//
+// Always at least one list — with no rules at all that is the empty one, which
+// is exactly what a run with nothing to replace should apply.
+export function replacementVariations() {
+  let combos = [[]];
+  for (const g of replacementGroups()) {
+    const next = [];
+    for (const c of combos) for (const r of g.rules) next.push(c.concat([r]));
+    combos = next;
+  }
+  const order = new Map(replacements.map((r, i) => [r, i]));
+  const at = r => (order.has(r) ? order.get(r) : 0);
+  return combos.map(c => c.slice().sort((a, b) => at(a) - at(b)));
+}
+// How many prompts a run will produce.
+export function variationCount() {
+  return replacementGroups().reduce((n, g) => n * g.rules.length, 1);
+}
+
 // What a rule substitutes. A [keyword] rule stores the picked prompt as an id,
 // so editing that prompt updates every rule using it; `to` is the snapshot taken
 // at pick time and the fallback when the prompt has since been deleted.
@@ -89,9 +131,12 @@ export function stripLeftoverTokens(text) {
 // Replacements are inserted through a function, not a string, so a $ in prompt
 // text stays a $ — ComfyUI's own dynamic-prompt syntax writes {2$$a|b}, and the
 // string form of .replace() reads $$ and $& as instructions.
-export function applyReplacements(text) {
+export function applyReplacements(text, only) {
   if (typeof text !== 'string') return text;
-  const rules = activeReplacements();
+  // `only` is one variation's rule list. Without it every enabled rule runs —
+  // the right answer when there is nothing to vary, and the old first-wins
+  // answer when there is, which is why a run always passes one.
+  const rules = only || activeReplacements();
   let out = text;
   for (const r of rules) out = out.replace(new RegExp(escRe(r.from), 'gi'), () => replacementText(r));
   const keyworded = rules.filter(isKeywordRule);
@@ -140,9 +185,9 @@ function paintStep(text, owner, re, replFor) {
   return { text: out, owner: own };
 }
 
-export function paintReplacements(text) {
+export function paintReplacements(text, only) {
   if (typeof text !== 'string') return null;
-  const rules = activeReplacements();
+  const rules = only || activeReplacements();
   let out = text;
   let owner = new Array(text.length).fill(-1);
   // The row index, not the position in the filtered list: that is what the
@@ -169,7 +214,7 @@ export function paintReplacements(text) {
       out = s.text; owner = s.owner;
     }
   }
-  if (out !== applyReplacements(text)) return null;
+  if (out !== applyReplacements(text, only)) return null;
   const spans = [];
   for (let i = 0; i < out.length; i++) {
     const o = owner[i] == null ? -1 : owner[i];
@@ -184,13 +229,13 @@ export function paintReplacements(text) {
 // filename and numeric-ish keys are skipped — a rule meant for prose would
 // otherwise rename a checkpoint.
 const SKIP_KEY = /_name$|name$|filename|ckpt|lora|vae|sampler|scheduler|model|path|url|format|extension|seed|width|height|steps|cfg/i;
-export function applyReplacementsToNodes(prompt) {
-  if (!activeReplacements().length) return prompt;
+export function applyReplacementsToNodes(prompt, only) {
+  if (!(only || activeReplacements()).length) return prompt;
   for (const node of Object.values(prompt || {})) {
     if (!node || !node.inputs) continue;
     for (const key of Object.keys(node.inputs)) {
       if (typeof node.inputs[key] !== 'string' || SKIP_KEY.test(key)) continue;
-      node.inputs[key] = applyReplacements(node.inputs[key]);
+      node.inputs[key] = applyReplacements(node.inputs[key], only);
     }
   }
   return prompt;

@@ -216,7 +216,7 @@ select.rmx-inp{cursor:pointer}
 .rmx-repl-all input,.rmx-repl-row input[type=checkbox]{width:16px;height:16px;accent-color:#0a84ff}
 .rmx-repl-row{
   display:grid;
-  grid-template-columns:8px auto minmax(0,1fr) auto minmax(0,1fr) auto;
+  grid-template-columns:8px auto minmax(0,1fr) auto minmax(0,1fr) 0 auto;
   align-items:center;gap:6px;margin-bottom:6px;
 }
 .rmx-repl-row>*{min-width:0}
@@ -228,6 +228,17 @@ select.rmx-inp{cursor:pointer}
    palette, so switching one back on does not renumber the colours of the rest. */
 .rmx-repl-dot{width:8px;height:8px;border-radius:50%;display:block}
 .rmx-repl-dot.off{opacity:.22}
+/* "2/3" — one of several rules that find the same thing, which a run turns into
+   a job each. The track only opens when something in the list is actually
+   varying; every row keeps the cell either way (an empty span where there is no
+   tag) so the columns still agree with each other. */
+.rmx-repl-list:has(.rmx-varn) .rmx-repl-row{
+  grid-template-columns:8px auto minmax(0,1fr) auto minmax(0,1fr) 36px auto;
+}
+.rmx-varn{
+  font-size:10px;line-height:1;padding:3px 4px;border-radius:999px;text-align:center;
+  background:#3a2a12;color:#ffb340;border:1px solid #5a4020;white-space:nowrap;
+}
 .rmx-repl-swap{padding:6px 9px;color:#0a84ff}
 .rmx-repl-del{width:30px;padding:6px 0;background:#3a1e1e;color:#e06c6c;border:1px solid #5a2a2a;border-radius:8px;cursor:pointer;font-size:12px}
 .rmx-repl-del:hover{border-color:#e06c6c}
@@ -293,6 +304,14 @@ select.rmx-inp{cursor:pointer}
 .mb-cell.sel{border-color:#0a84ff;box-shadow:0 0 0 2px #0a84ff inset}
 .mb-tick{position:absolute;top:5px;left:5px;width:19px;height:19px;accent-color:#0a84ff;cursor:pointer;z-index:3;margin:0}
 .mb-selbar{display:flex;align-items:center;gap:10px;padding:9px 12px;border-top:1px solid #2c2c2e;font-size:12.5px;flex:none}
+/* Loud on purpose: several enabled rules for one keyword multiply the queue,
+   and finding that out at run 48 is the failure this is here to prevent. */
+.rmx-varwarn{
+  margin:0 0 10px;padding:9px 11px;border-radius:8px;
+  border:1px solid #ff453a66;background:#ff453a1a;color:#ff8f8f;
+  font-size:12.5px;line-height:1.5;
+}
+.rmx-varwarn b{color:#ffc0c0}
 .rmx-warn{margin:-6px 0 12px;padding:8px 10px;border:1px solid #ff9f0a55;background:#ff9f0a14;color:#ffb340;border-radius:7px;font-size:12px;line-height:1.5}
 .rmx-pchoice{max-width:780px}
 .rmx-pchoice-body{display:flex;gap:12px;padding:14px;overflow:auto;flex:1;min-height:0}
