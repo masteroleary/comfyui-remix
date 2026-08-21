@@ -171,13 +171,39 @@ export default {
     // each other and a run does one job per combination. A row with nothing
     // typed in it yet sorts last rather than to the top, or every new row would
     // jump away from the button that made it.
-    const rows = computed(() => replacements
-      .map((r, i) => ({ r, i }))
-      .sort((a, b) => {
-        const A = foldTok(a.r.from), B = foldTok(b.r.from);
-        if (!A !== !B) return A ? -1 : 1;
-        return A.localeCompare(B) || a.i - b.i;
-      }));
+    // Empty finds last: a row with nothing typed in it yet is unfinished, and
+    // sorting it to the top would send every new one away from the button that
+    // made it.
+    const byFrom = (a, b) => {
+      const A = foldTok(a.r.from), B = foldTok(b.r.from);
+      if (!A !== !B) return A ? -1 : 1;
+      return A.localeCompare(B) || a.i - b.i;
+    };
+    // The order is taken when the panel opens and then held until it opens
+    // again. Sorting live meant the row moved out from under the cursor as its
+    // keyword was typed — [f… landing between [breasts] and [hair] one letter
+    // at a time — and a list that reorders itself mid-edit is worse than one
+    // that is briefly out of order.
+    //
+    // Keyed on the rule objects rather than their positions: a delete splices
+    // the array and every index after it shifts, where the objects themselves
+    // are the same ones throughout. A rule the snapshot has never seen — added
+    // since it was taken, or brought in by a sync — sits at the end in list
+    // order rather than being sorted into the middle of an edit.
+    const sortOrder = ref(null);
+    function snapshotOrder() {
+      const m = new Map();
+      replacements.map((r, i) => ({ r, i })).sort(byFrom).forEach((e, n) => m.set(e.r, n));
+      sortOrder.value = m;
+    }
+    function onPanelToggle(e) { if (e.target.open) snapshotOrder(); }
+    const rows = computed(() => {
+      const order = sortOrder.value;
+      const list = replacements.map((r, i) => ({ r, i }));
+      if (!order) return list;
+      const at = e => (order.has(e.r) ? order.get(e.r) : Infinity);
+      return list.sort((a, b) => at(a) - at(b) || a.i - b.i);
+    });
     // How many rules share this one's keyword, and which of them this is — the
     // rows are adjacent after the sort, so a plain "2 of 3" is enough to read
     // the group off the list.
@@ -205,11 +231,11 @@ export default {
       isKeywordRule, promptLib,
       addRepl, delRepl, swapRepl, toggleReplAll, pickPrompt,
       menuFor, openMenu, closeMenu, menuList, chooseKeyword, ruleFor, onFindEsc,
-      painted, ruleColor, ruleLive, dotTitle, rows, variantTag, variations,
+      painted, ruleColor, ruleLive, dotTitle, rows, variantTag, variations, onPanelToggle,
     };
   },
   template: `
-    <details class="rmx-repl">
+    <details class="rmx-repl" @toggle="onPanelToggle">
       <summary>Prompt Replacements<span class="rmx-repl-on" v-if="replActiveCount"> — {{ replActiveCount }} active</span><span class="rmx-mut" v-else-if="replacements.length"> — {{ replacements.length }} off</span></summary>
       <div class="rmx-repl-body">
         <div class="rmx-mut" style="font-size:12px;margin-bottom:8px">
