@@ -43,6 +43,7 @@ body.rmx-noscroll{overflow:hidden !important;overscroll-behavior:none}
 .rmx-runsec{flex:1;min-height:0;padding:16px;overflow:auto}
 .rmx-runsec .rmx-run{flex-wrap:wrap;margin:0 0 8px}
 .rmx-inp{background:#1c1c1e;color:#f2f2f7;border:1px solid #48484a;border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit}
+.rmx-inp:disabled{opacity:.45;background:#161618;color:#8e8e93;cursor:not-allowed}
 select.rmx-inp{cursor:pointer}
 .rmx-grid{display:flex;flex-wrap:wrap;gap:14px}
 .rmx-field{display:flex;flex-direction:column;gap:5px}
@@ -212,12 +213,50 @@ select.rmx-inp{cursor:pointer}
 .rmx-repl>summary .rmx-repl-on{color:#ff9f0a;font-weight:700}
 .rmx-repl-body{padding:2px 12px 12px}
 .rmx-repl-all{display:flex;align-items:center;gap:6px;font-size:12px;color:#8e8e93;margin-bottom:8px;cursor:pointer;user-select:none}
-.rmx-repl-all input,.rmx-repl-row input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:#0a84ff}
-.rmx-repl-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
-.rmx-repl-row input[type=text]{flex:1;min-width:0}
-.rmx-repl-swap{flex:none;padding:6px 9px;color:#0a84ff}
-.rmx-repl-del{flex:none;width:30px;padding:6px 0;background:#3a1e1e;color:#e06c6c;border:1px solid #5a2a2a;border-radius:8px;cursor:pointer;font-size:12px}
+.rmx-repl-all input,.rmx-repl-row input[type=checkbox]{width:16px;height:16px;accent-color:#0a84ff}
+.rmx-repl-row{
+  display:grid;
+  grid-template-columns:8px auto minmax(0,1fr) auto minmax(0,1fr) auto;
+  align-items:center;gap:6px;margin-bottom:6px;
+}
+.rmx-repl-row>*{min-width:0}
+.rmx-repl-row input[type=text],.rmx-repl-row select{width:100%}
+/* The find cell is the positioning context for the keyword menu. */
+.rmx-repl-find{position:relative;display:block;min-width:0}
+/* Which colour this rule's text is in the preview underneath. A rule that
+   cannot fire is dimmed rather than dropped: the row keeps its place in the
+   palette, so switching one back on does not renumber the colours of the rest. */
+.rmx-repl-dot{width:8px;height:8px;border-radius:50%;display:block}
+.rmx-repl-dot.off{opacity:.22}
+.rmx-repl-swap{padding:6px 9px;color:#0a84ff}
+.rmx-repl-del{width:30px;padding:6px 0;background:#3a1e1e;color:#e06c6c;border:1px solid #5a2a2a;border-radius:8px;cursor:pointer;font-size:12px}
 .rmx-repl-del:hover{border-color:#e06c6c}
+/* Keywords offered under the find box. It hangs out of the row, so it needs to
+   sit above the rows below it; the max-height is what keeps a large library
+   from pushing the rest of the form off screen. */
+.rmx-kwmenu{
+  position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;
+  background:#1c1c1e;border:1px solid #48484a;border-radius:10px;
+  box-shadow:0 10px 30px #000a;max-height:236px;overflow:auto;padding:4px;
+}
+.rmx-kwmenu-h{
+  position:sticky;top:-4px;background:#1c1c1e;
+  font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#7d7d82;
+  padding:6px 8px 4px;
+}
+.rmx-kw{
+  display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  background:none;border:0;border-radius:7px;padding:6px 8px;
+  color:#f2f2f7;font:inherit;font-size:12.5px;cursor:pointer;
+}
+.rmx-kw:hover{background:#0a84ff26}
+.rmx-kw-tok{font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Not in this prompt: offered, but not dressed up as one that will fire. */
+.rmx-kw.off .rmx-kw-tok{color:#8e8e93}
+.rmx-kw-used{
+  margin-left:auto;flex:none;font-size:10px;line-height:1;padding:3px 6px;border-radius:999px;
+  background:#2d2416;color:#e0b86c;border:1px solid #4a3a1e;white-space:nowrap;
+}
 .rmx-nodegroup{margin:2px 0 10px}
 /* Family pills above the first lora section. Same language as the .rmx-tabs
    switch — quiet until on — but they wrap: there are several, and a phone is
@@ -231,6 +270,9 @@ select.rmx-inp{cursor:pointer}
 .rmx-fam:hover{border-color:#0a84ff;color:#c7c7cc}
 .rmx-fam.on{background:#0a84ff;border-color:#0a84ff;color:#fff}
 .rmx-fams-note{font-size:11px;color:#636366}
+.rmx-matchin{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 4px;font-size:12.5px;color:#c7c7cc;cursor:pointer}
+.rmx-matchin b{font-weight:600}
+.rmx-matchin .rmx-mut{font-size:11.5px}
 .rmx-lora-cols{display:flex;gap:16px;margin-top:6px}
 .rmx-lora-col{flex:1;min-width:0}
 @media (max-width:640px){.rmx-lora-cols{flex-direction:column;gap:8px}}
@@ -252,6 +294,23 @@ select.rmx-inp{cursor:pointer}
 .mb-tick{position:absolute;top:5px;left:5px;width:19px;height:19px;accent-color:#0a84ff;cursor:pointer;z-index:3;margin:0}
 .mb-selbar{display:flex;align-items:center;gap:10px;padding:9px 12px;border-top:1px solid #2c2c2e;font-size:12.5px;flex:none}
 .rmx-warn{margin:-6px 0 12px;padding:8px 10px;border:1px solid #ff9f0a55;background:#ff9f0a14;color:#ffb340;border-radius:7px;font-size:12px;line-height:1.5}
+.rmx-pchoice{max-width:780px}
+.rmx-pchoice-body{display:flex;gap:12px;padding:14px;overflow:auto;flex:1;min-height:0}
+.rmx-pchoice-opt{
+  flex:1;min-width:0;display:flex;flex-direction:column;gap:8px;text-align:left;
+  background:#1c1c1e;border:1px solid #48484a;border-radius:12px;padding:12px;
+  color:#f2f2f7;font:inherit;cursor:pointer;
+}
+.rmx-pchoice-opt:hover{border-color:#0a84ff;background:#0a84ff14}
+.rmx-pchoice-t{display:flex;flex-direction:column;gap:2px;font-size:14px;font-weight:600}
+.rmx-pchoice-t span{font-size:11.5px;font-weight:400;color:#8e8e93}
+.rmx-pchoice-p{
+  font-size:12px;line-height:1.5;color:#c7c7cc;white-space:pre-wrap;word-break:break-word;
+  background:#0a0a0a;border:1px solid #2c2c2e;border-radius:8px;padding:8px;
+  max-height:36vh;overflow:auto;
+}
+.rmx-pchoice-p.empty{color:#636366;font-style:italic}
+@media (max-width:640px){.rmx-pchoice-body{flex-direction:column}.rmx-pchoice-p{max-height:22vh}}
 .rmx-picked{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;flex-basis:100%}
 .rmx-picked-cell{position:relative;width:56px;height:56px;border:1px solid #2c2c2e;border-radius:6px;overflow:hidden;background:#1c1c1e}
 .rmx-picked-cell img{width:100%;height:100%;object-fit:cover;display:block}
@@ -276,4 +335,35 @@ select.rmx-inp{cursor:pointer}
   background:#0a0a0a;border:1px solid #2c2c2e;color:#c7c7cc;
   font-size:12.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word;
   max-height:220px;overflow:auto;user-select:text;
+}
+/* ── The panel in two columns ──────────────────────────────────────────────
+   One column by default, two where there is room for two usable ones: a rule
+   row carries two text inputs, a swap and a delete, and squeezed into half a
+   narrow window that is worse than scrolling down to the preview. The blurb
+   above the split stays across the top of both — it describes the panel rather
+   than either column.
+
+   This block has to sit BELOW the .rmx-repl-final rules it overrides. A media
+   query adds no specificity, so from anywhere above them the base rule would
+   win every property both of them set. */
+.rmx-repl-cols{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.rmx-repl-list{min-width:0}
+/* :has, rather than a class the template would have to set, because the second
+   track exists exactly when there is a preview to put in it — and the preview is
+   already conditional (v-if="prompt"). A class would state that same condition a
+   second place, and a workflow with no prompt field would otherwise leave the
+   rules at 57% width with a reserved column of nothing beside them. */
+@media (min-width:1000px){
+  .rmx-repl-cols:has(.rmx-repl-final){grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:18px;align-items:start}
+  /* As a column it is divided by its left edge rather than by a rule above it. */
+  .rmx-repl-cols:has(.rmx-repl-final) > .rmx-repl-final{
+    margin-top:0;padding-top:0;padding-left:18px;
+    border-top:0;border-left:1px solid #2c2c2e;
+  }
+  /* Pinned only inside the dialog, whose .rmx-form is the scroll container.
+     The inspect page scrolls the document instead, where top:0 is the top of
+     the window — underneath .shell-settings and the logout button, which are
+     position:fixed at z-index 400 in that same corner. */
+  .rmx-form .rmx-repl-cols:has(.rmx-repl-final) > .rmx-repl-final{position:sticky;top:0}
+  .rmx-repl-cols:has(.rmx-repl-final) .rmx-repl-final-text{max-height:min(46vh,420px)}
 }

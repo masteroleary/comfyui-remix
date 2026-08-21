@@ -152,6 +152,12 @@ const FieldControl = {
     });
     const openPicker = inject('openPicker', null);
     const addLoraRow = inject('addLoraRow', null);
+    // Width/Height while "Match Input Image" is on. The numbers are about to be
+    // replaced by the ones measured off the file going in, so an editable box
+    // here would be offering a value no run will ever use.
+    const sizeLocked = inject('sizeLocked', null);
+    const locked = computed(() => !!(sizeLocked && sizeLocked.value
+      && (props.field.kind === 'width' || props.field.kind === 'height')));
     // Drop one file from a multi-file pick, keeping `value` on the first survivor and
     // collapsing back to a plain single pick when only one is left.
     function dropPicked(field, i) {
@@ -164,7 +170,7 @@ const FieldControl = {
     // high/low pair — the only way loras get added now that the search-and-add
     // box is gone, since it just dumped every lora the server had cached.
     function addFromLibrary(lora) { if (addLoraRow) addLoraRow(props.field, lora); }
-    return { t: computed(() => ctype(props.field)), shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
+    return { t: computed(() => ctype(props.field)), locked, shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
   },
   template: `
     <textarea v-if="t==='multiline'" v-autosize class="rmx-inp rmx-ta" style="width:100%" rows="2" v-model="field.value"></textarea>
@@ -177,7 +183,8 @@ const FieldControl = {
               :title="'Pin the seed this file was generated with (' + field._mediaSeed + ')'">↺ this file's seed</button>
     </span>
     <input v-else-if="t==='boolean'" type="checkbox" v-model="field.value" style="width:16px;height:16px;accent-color:#0a84ff">
-    <input v-else-if="t==='int' || t==='float'" type="number" class="rmx-inp" style="width:120px" :step="t==='float' ? '0.01' : '1'" v-model="field.value">
+    <input v-else-if="t==='int' || t==='float'" type="number" class="rmx-inp" style="width:120px" :step="t==='float' ? '0.01' : '1'" v-model="field.value"
+           :disabled="locked" :title="locked ? 'Coming from the input image — untick Match Input Image to set it here' : null">
     <select v-else-if="t==='combo'" class="rmx-inp" v-model="field.value"><option v-for="o in (field.control&&field.control.options||[field.value])" :key="o" :value="o">{{ o }}</option></select>
     <div v-else-if="t==='lora_rows'" class="rmx-loras">
       <div v-for="e in visibleLoras" :key="e.i" class="rmx-lora" :class="{off: !e.r.on, sug: !!e.match}">
@@ -211,10 +218,28 @@ const FieldControl = {
   `,
 };
 
+// ── Match Input Image ──────────────────────────────────────────────────────
+// The tick that hands the frame size to the file going in. A component rather
+// than the markup written out twice: it renders under whichever block holds the
+// size fields, which is either the loose flow or one titled group, and a
+// control kept in two places is a control that ends up saying two things.
+const MatchInput = {
+  name: 'MatchInput',
+  props: ['cfg', 'batch'],
+  template: `
+    <label class="rmx-matchin"
+           :title="cfg.matchInput ? 'Width and height come from the image going in — untick to type them here' : 'Size every run to the image going into it'">
+      <input type="checkbox" class="rmx-tgl" v-model="cfg.matchInput">
+      <b>Match Input Image</b>
+      <span class="rmx-mut">{{ batch ? 'each picked file sets its own width and height' : 'width and height come from the input image' }}</span>
+    </label>
+  `,
+};
+
 // ── The form ───────────────────────────────────────────────────────────────
 export default {
   name: 'WorkflowFields',
-  components: { FieldControl, MediaBrowser },
+  components: { FieldControl, MediaBrowser, MatchInput },
   props: {
     // The live field config: { fields: [...], presets: [...] }, mutated in
     // place by the controls — the contract both hosts already rely on.
@@ -235,6 +260,57 @@ export default {
       if (nodeGroups.value.loose.some(isP)) return 'loose';
       const g = nodeGroups.value.titled.find(x => x.fields.some(isP));
       return g ? g.key : 'top';
+    });
+
+    // ── Match Input Image ───────────────────────────────────────────────
+    // A workflow that takes an image and also states a frame size is stating it
+    // twice: the file going in already has a width and a height, and typing them
+    // again is how a remix comes back stretched. So when both are on screen, the
+    // size fields default to being driven by the input rather than by the
+    // workflow's stored numbers.
+    //
+    // The tick lives on cfg, not here, for the same reason the field values do:
+    // this component owns no state, and the host has to be able to read the
+    // answer when it builds a run. matchSize is that answer resolved — the two
+    // field ids to overwrite, or null when the workflow has no size pair or no
+    // image input — so a host only ever has to ask whether it is there.
+    // The first enabled pair, deliberately: a workflow with two size sources
+    // (a latent and a resize target, say) gets only the first one matched, and
+    // the second keeps whatever the workflow stored. Known and left alone —
+    // none of the workflows this has been run against carries two, and guessing
+    // that both want the input's dimensions is a guess about the graph.
+    const sizePair = computed(() => {
+      const w = enabledFields.value.find(f => f.kind === 'width');
+      const h = enabledFields.value.find(f => f.kind === 'height');
+      return (w && h) ? { w, h } : null;
+    });
+    const imageInputs = computed(() => enabledFields.value.filter(f => f.kind === 'image_input'));
+    const canMatchInput = computed(() => !!sizePair.value && imageInputs.value.length > 0);
+    const matchSize = computed(() => (canMatchInput.value
+      ? { width: sizePair.value.w.id, height: sizePair.value.h.id }
+      : null));
+    watch(matchSize, m => { props.cfg.matchSize = m; }, { immediate: true });
+    // Re-armed for every form, which is what "automatically checked" means: a
+    // switch to another workflow replaces cfg.fields outright, and untangling
+    // last workflow's tick from this one's size fields is not a thing a user
+    // asked us to remember. Keyed on the array itself, so toggling a field on
+    // or off inside the same form leaves the tick where it was put.
+    watch(fields, () => { props.cfg.matchInput = true; }, { immediate: true });
+    // A batch pick is the case the checkbox exists for: each file gets its own
+    // size rather than every run inheriting the first one's.
+    const matchBatch = computed(() => imageInputs.value.some(f => Array.isArray(f.values) && f.values.length > 1));
+    // Read by FieldControl to grey out the two boxes it governs.
+    provide('sizeLocked', computed(() => !!(canMatchInput.value && props.cfg.matchInput)));
+    // Where the row goes: under the block holding the size fields, so the tick
+    // sits with the controls it disables. `loose` is the fallback rather than a
+    // last resort — a size primitive with no siblings flows there — and the row
+    // is a sibling of that flow, so it renders whether or not the flow is empty.
+    const matchAt = computed(() => {
+      if (!canMatchInput.value) return '';
+      const isSize = f => f.kind === 'width' || f.kind === 'height';
+      if (nodeGroups.value.loose.some(isSize)) return 'loose';
+      const g = nodeGroups.value.titled.find(x => x.fields.some(isSize));
+      return g ? g.key : 'loose';
     });
 
     // ── LoRA family filter ──────────────────────────────────────────────
@@ -468,7 +544,7 @@ export default {
     const loraLow = computed(() => enabledLoras.value.filter(f => f.variant === 'low'));
     const loraOther = computed(() => enabledLoras.value.filter(f => f.variant !== 'high' && f.variant !== 'low'));
     return { picker, onPick, promptAt, enabledFields, hiddenFields, isWide, nodeGroups, enabledLoras, loraHigh, loraLow, loraOther,
-      LORA_FAMILIES, family, detectedFamily, toggleFamily };
+      matchAt, matchBatch, LORA_FAMILIES, family, detectedFamily, toggleFamily };
   },
   template: `
     <div class="rmx-fields">
@@ -480,6 +556,7 @@ export default {
           <field-control :field="f"></field-control>
         </div>
       </div>
+      <match-input v-if="matchAt === 'loose'" :cfg="cfg" :batch="matchBatch"></match-input>
       <template v-for="g in nodeGroups.titled" :key="g.key">
       <slot v-if="promptAt === g.key"></slot>
       <div class="rmx-nodegroup">
@@ -490,6 +567,7 @@ export default {
             <field-control :field="f"></field-control>
           </div>
         </div>
+        <match-input v-if="matchAt === g.key" :cfg="cfg" :batch="matchBatch"></match-input>
       </div>
       </template>
       <!-- Above the first lora section: which model family to show. The pills are

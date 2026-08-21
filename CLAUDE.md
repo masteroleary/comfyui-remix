@@ -56,6 +56,15 @@ usually the same bug: something the host provided instead of the component.
   are reactive objects the controls write straight into, and the host reads them
   back when it builds a run. The host contributes only its own extras, through
   the slot — the replacement rules, in both cases.
+  It also owns **Match Input Image**: a workflow with a width/height pair *and*
+  an image input is stating its frame size twice, so the tick appears under the
+  size fields, starts on, and greys them out. The tick and the two field ids it
+  governs go on `cfg` (`matchInput`, `matchSize`) rather than staying here,
+  because the host is what has to read them at run — and a tick that worked in
+  the dialog and did nothing on the inspect page is precisely the drift this
+  component exists to prevent. It is re-armed per form, keyed on the fields
+  array itself, so a workflow switch turns it back on but toggling a field
+  inside the same form leaves it where it was put.
 - **`components/MediaBrowser.js`** — the gallery a media field opens.
 - **`components/MediaTile.js`** — one card: square thumbnail flush to the tile,
   info bar under it. The thumbnail opens the viewer, the bar raises Remix. Used
@@ -80,12 +89,67 @@ the trip is ordinary history — `/jobs` → `/view/…` → back — and the ro
 the *page* scroll (`app.css` unsets `.rmx-jobs`'s inner scroller): a position
 inside a fixed-height box is one the router can neither save nor restore.
 
+**Cancel has to reach the queueing loop, not just the queue.** A job's runs are
+all submitted up front, so Cancel and `launchJob` are two writers to the same
+ComfyUI queue: sweeping it while the loop is still filling it left the job
+cancelled here and rendering there. `cancelJob` sets `_cancelled` first (the
+loop checks it before each submit and sweeps once more when it stops), reads
+`/queue` for what is actually running rather than trusting `execPid`, and then
+*verifies* — a row that says "Cancelled" over a queue that is still working is
+worse than an error. Deleting a running job cancels it first, for the same
+reason: once the record is gone, nothing holds the prompt ids that could.
+
+**Match Input Image is applied in `launchJob`, not in the caller.** A batch is N
+jobs each holding its own file, so measuring once up front would size every run
+to the first one; `launchJob` measures `matchSize.from` (the browser reads the
+`/file` URL the tile already loaded) and overwrites the two size fields just
+before the graph is built. A value with no path separator in it is a ComfyUI
+input name rather than a library file, so it cannot be fetched to be measured —
+that falls back to the source media, which is what the upload wires into MAIN
+IMAGE anyway.
+
+**Switching workflow asks which prompt survives.** Every workflow carries a
+prompt, so picking another one replaces what is in the box — right when you
+switched *for* that prompt, wrong when you had just written one. The dropdown
+goes through `pickWorkflow` rather than `v-model` for exactly this: it is the
+only assignment to `wf` that is a user changing their mind, where the other six
+(opening a file, adding a recognised workflow, saving a shortcut, exporting a
+graph, the library panel, deleting a shortcut) are the app moving the selection
+itself. A **shortcut** never asks — its prompt *is* what was saved, so picking
+one loads it outright.
+
 **Everything that runs goes through `launchJob`** — the inspect page included.
 It used to run its own socket, uploader and output poller inside a component,
 which meant a run died whenever the page unmounted: opening one of its own
 outputs in the viewer was enough. The prompt-replacement rules are exported from
 the same module for the same reason — two copies meant a rule typed on one
 surface did nothing to a run started from it.
+
+### Prompt replacements
+
+The rules are a shared list in `app/replacements.js`; `ReplacementRules.js` is
+the editor both hosts mount through the form's slot. Three things about it are
+load-bearing:
+
+- **The preview is painted by a second walk of the pipeline, and it checks
+  itself.** `paintReplacements` returns `[{text, rule}]` so each replacement's
+  text can carry its rule's colour. Attribution cannot come from diffing before
+  against after — a diff cannot say which of two rules produced a stretch of
+  text — so it re-walks, which makes it a second implementation of the thing
+  this module exists to keep single. It therefore compares its own result
+  against `applyReplacements` and returns `null` on any disagreement; the editor
+  then shows the plain string. The tidy-up steps live in one `STRIP_STEPS` table
+  both walks read, for the same reason.
+- **The find box offers the keywords rather than asking you to remember them** —
+  the ones this prompt actually contains first, since only a rule for one of
+  those changes this run, then the library's categories and any keyword another
+  rule names, marked as not present.
+- **`loadReplacements` only believes an answer shaped like a list.** It seeds
+  from localStorage so the editor is never blank, then adopts the server's copy;
+  if the server has none and this browser does, it pushes its own up. That push
+  is the module's only unprompted write, and an unreadable reply used to reach it
+  — a 200 with a truncated body read as "the server has no rules" and posted a
+  stale cache over the real ones.
 
 ## API Endpoints
 

@@ -472,7 +472,6 @@ export default {
       if (data.workflow && data.workflow.nodes) {
         recognizeWorkflow(data.workflow);
       }
-      updateCopyPromptBtn();
       updateApplyBtnVisibility();
       status.value = '';
     }
@@ -690,6 +689,22 @@ export default {
         .filter(f => f.enabled && f.kind === 'image_input' && typeof f.value === 'string' && f.value)
         .map(f => ({ id: f.id, value: f.value }));
 
+      // Match Input Image, ticked in the form above. The two size fields it
+      // governs are overwritten at run with what the input file measures — same
+      // engine call the Remix dialog makes, since a tick that worked on one
+      // surface and did nothing on the other is the bug this page keeps
+      // relearning.
+      //
+      // mediaFields here is every image field with a value, library path or
+      // not — unlike the dialog's, which keeps only the paths. So `from` may
+      // well be a bare ComfyUI input name that /file/ cannot serve; launchJob
+      // measures the file this page is open on when that comes back empty,
+      // which is why this does not need to filter.
+      const cfgNow = fieldConfig.value;
+      const matchSize = (cfgNow.matchSize && cfgNow.matchInput)
+        ? { width: cfgNow.matchSize.width, height: cfgNow.matchSize.height, from: (mediaFields[0] && mediaFields[0].value) || '' }
+        : null;
+
       const newJobId = launchJob({
         workflowFile: inherit ? '__inherit__' : wfName.value,
         workflowLabel: inherit ? 'Inherited' : wfName.value.replace(/^APP /, '').replace(/\.json$/, ''),
@@ -699,6 +714,7 @@ export default {
         source: { path: filePath.value, name: fileName.value, type: filePath.value ? (isVideo.value ? 'video' : 'image') : '' },
         fieldValues: collectFieldValues(selectedPreset.value || null),
         mediaFields,
+        matchSize,
         promptText: pf ? String(pf.value == null ? '' : pf.value) : '',
         loras: loras.length ? loras : null,
         preset: selectedPreset.value || '',
