@@ -147,11 +147,15 @@ function noteAuthAttempt(ip) {
 let authInFlight = 0;
 const AUTH_MAX_INFLIGHT = 4;
 // The lock screen. Self-contained by necessity: with the gate on, every other
-// asset (common.css, the vendored Vue, even the favicon) is behind it too.
+// asset (common.css, the vendored Vue, the favicon file) is behind it too — so
+// the icon here is the same mark inlined as a data URI rather than a link to
+// /favicon.svg, which would 401 and leave a locked tab with no icon at all.
 const LOGIN_PAGE = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>ComfyRemix</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='5' y1='27' x2='27' y2='5' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%238b5cff'/%3E%3Cstop offset='1' stop-color='%23f08bff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='7' fill='%230d0d0d'/%3E%3Cg fill='none' stroke='url(%23g)' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M9.6 16h2.2c2.8 0 2.6-3.6 4.6-5.6 1.1-1.1 2-1.4 3.4-1.4'/%3E%3Cpath d='M9.6 16h10.2'/%3E%3Cpath d='M9.6 16h2.2c2.8 0 2.6 3.6 4.6 5.6 1.1 1.1 2 1.4 3.4 1.4'/%3E%3C/g%3E%3Cg fill='url(%23g)'%3E%3Ccircle cx='8' cy='16' r='3'/%3E%3Ccircle cx='23' cy='9' r='2.8'/%3E%3Ccircle cx='23' cy='16' r='2.8'/%3E%3Ccircle cx='23' cy='23' r='2.8'/%3E%3C/g%3E%3C/svg%3E">
+<meta name="theme-color" content="#0d0d0d">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -1803,6 +1807,7 @@ const MIME = {
   '.flac': 'audio/flac', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
   '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'application/javascript',
   '.json': 'application/json',
+  '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
 };
 
 const VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v']);
@@ -1988,7 +1993,12 @@ const server = http.createServer((req, res) => {
   }
   // Shared static assets (explicit allowlist — no generic file serving)
   if ((pn === '/common.css' || pn === '/app.css' || pn === '/ui-guards.js' || pn === '/auth-ui.js'
-       || pn === '/logo-home.webp') && req.method === 'GET') {
+       || pn === '/logo-home.webp'
+       // The tab icon, in the three shapes a browser might ask for. /favicon.ico
+       // is here because browsers request it whether or not a page links to one,
+       // and a 404 per navigation is noise in the log rather than an absence.
+       || pn === '/favicon.ico' || pn === '/favicon.svg' || pn === '/apple-touch-icon.png'
+      ) && req.method === 'GET') {
     res.setHeader('Cache-Control', 'no-cache');
     serveFile(path.join(__dirname, pn.slice(1)), req, res); return;
   }

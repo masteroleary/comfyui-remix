@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
 <title>ComfyRemix</title>
+<!-- The tab icon. SVG for anything modern, .ico for everything else and for
+     the bare /favicon.ico a browser asks for unprompted; the touch icon is
+     square and opaque because iOS masks its own corners onto it. All three are
+     named in server.js — static serving is an allowlist, so a file at the repo
+     root is a 404 until it is. -->
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48 64x64">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#0d0d0d">
 <link rel="stylesheet" href="/common.css">
 <link rel="stylesheet" href="/app.css">
 <!-- Per-component styles. Split alongside the components rather than kept as one

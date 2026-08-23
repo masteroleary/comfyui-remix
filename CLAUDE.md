@@ -26,6 +26,15 @@ Static serving is an **explicit allowlist**, not a directory mount: a new asset 
 the repo root is a 404 until it is named in server.js. `app/` and `vendor/` are
 allowlisted by shape (`.js`/`.css`, one directory deep).
 
+The tab icon is three files at that root — `favicon.svg` (the source, and what
+anything modern uses), `favicon.ico` (16/32/48/64, for everything else and for
+the bare `/favicon.ico` browsers request unprompted) and `apple-touch-icon.png`
+(180px, square and opaque, since iOS masks its own corners onto it). The raster
+pair is generated from the SVG, so edit the SVG and re-render rather than
+touching them. The lock screen carries a fourth copy inlined as a data URI:
+with the gate on the files are behind it, and a link would 401 into a blank
+tab.
+
 ### Routes
 
 `/` home · `/browse/:root/:path*` grid · `/view/:root/:path+` viewer ·
