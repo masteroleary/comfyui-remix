@@ -30,7 +30,7 @@ import MediaTile from '../components/MediaTile.js';
 // at the top of that file); what matters here is that there is exactly one.
 import { launchJob, cancelJob, jobs, link, presetFromEmbedded, outputItems, forgetOutput } from '../components/RemixDialog.js';
 import ReplacementRules from '../components/ReplacementRules.js';
-import WorkflowFields from '../components/WorkflowFields.js';
+import WorkflowFields, { replaceableText } from '../components/WorkflowFields.js';
 import { replacementVariations, replacementGroups, replacementText, applyReplacements } from '../replacements.js';
 
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = window.Vue;
@@ -711,8 +711,12 @@ export default {
       // through the same engine. A rules editor that multiplied the queue on one
       // surface and quietly picked the first rule on the other is the drift this
       // page keeps being the victim of.
-      const variations = replacementVariations();
-      const multi = new Set(replacementGroups().filter(g => g.rules.length > 1).map(g => g.key));
+      // Judged against the text this form will send, like the dialog: rules for a
+      // keyword the prompt does not contain are not alternatives, so they fan out
+      // over nothing rather than queueing identical jobs.
+      const replText = replaceableText(cfgNow.fields);
+      const variations = replacementVariations(replText);
+      const multi = new Set(replacementGroups(replText).filter(g => g.live && g.rules.length > 1).map(g => g.key));
       const labelFor = (v, n) => (variations.length < 2 ? '' :
         '#' + (n + 1) + '/' + variations.length + ' · ' + v
           .filter(r => multi.has(String(r.from).trim().toLowerCase()))

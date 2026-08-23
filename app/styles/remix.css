@@ -312,6 +312,16 @@ select.rmx-inp{cursor:pointer}
   font-size:12.5px;line-height:1.5;
 }
 .rmx-varwarn b{color:#ffc0c0}
+/* The same fact the other way round: rules that are set and are not going to
+   fire, because this prompt does not contain their keyword. Muted, not red —
+   it is the absence of a multiplication, so nothing is about to cost anything.
+   It is here at all so the x6 that stopped appearing has somewhere to say why. */
+.rmx-varidle{
+  margin:0 0 10px;padding:8px 11px;border-radius:8px;
+  border:1px solid #48484a;background:#ffffff08;color:#8e8e93;
+  font-size:12px;line-height:1.5;
+}
+.rmx-varidle b{color:#c7c7cc}
 .rmx-warn{margin:-6px 0 12px;padding:8px 10px;border:1px solid #ff9f0a55;background:#ff9f0a14;color:#ffb340;border-radius:7px;font-size:12px;line-height:1.5}
 .rmx-pchoice{max-width:780px}
 .rmx-pchoice-body{display:flex;gap:12px;padding:14px;overflow:auto;flex:1;min-height:0}

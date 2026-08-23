@@ -36,17 +36,62 @@ const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // had already been replaced. That is a trap — the row is ticked, it sits in the
 // list, and it changes nothing — so they are variations instead. Each group
 // contributes one choice to a run, and the caller queues a job per combination.
+
+// Which rules the text in front of us can actually reach. A rule whose "find"
+// is nowhere in the prompt replaces nothing, so several rules for it are not
+// variations of anything: every combination produces the identical prompt, and
+// the run queues N identical jobs for it. Switching to a workflow whose prompt
+// carries no [keyword] at all and still getting the multiplication is the
+// expensive version of that — the rules did not change, the text did.
+//
+// Reachability rather than a plain scan, because a rule's replacement can carry
+// another rule's find: [female] → "…, [hair], …" makes [hair] live in a prompt
+// that never mentioned it. So each rule that lights up adds its replacement to
+// the haystack and we go round again until nothing new does.
+//
+// The haystack only grows — a real replacement also *removes* the text it
+// matched, and this deliberately does not — because the direction to be wrong
+// in is "kept a variation that changes nothing", never "dropped one that would
+// have". Same reason a caller with no text to offer gets everything back live.
+export function reachableRules(text, rules) {
+  const list = rules || activeReplacements();
+  const live = new Set();
+  if (typeof text !== 'string') { for (const r of list) live.add(r); return live; }
+  let hay = text.toLowerCase();
+  for (;;) {
+    let grew = false;
+    for (const r of list) {
+      if (live.has(r)) continue;
+      // Literal and case-insensitive, exactly as applyReplacements matches it.
+      const from = String(r.from).trim().toLowerCase();
+      if (!from || hay.indexOf(from) < 0) continue;
+      live.add(r);
+      hay += '\n' + String(replacementText(r)).toLowerCase();
+      grew = true;
+    }
+    if (!grew) return live;
+  }
+}
+
+// `text` is what this run is going to rewrite, when the caller knows it: each
+// group is flagged `live` or not, and a group that cannot fire is not a choice
+// to fan out over. Callers with nothing to offer get every group live, which is
+// what this did before it could tell.
 //
 // Grouped on the folded `from`, because that is what "the same rule" means to
 // the substitution: matching is case-insensitive, so [Female] and [female] are
 // one group and would otherwise both fire on the same token.
-export function replacementGroups() {
+export function replacementGroups(text) {
   const groups = new Map();
+  const live = reachableRules(text);
   for (const r of activeReplacements()) {
     const k = String(r.from).trim().toLowerCase();
     if (!groups.has(k)) groups.set(k, { key: k, label: String(r.from).trim(), rules: [] });
     groups.get(k).rules.push(r);
   }
+  // One answer per group: its rules all find the same thing, so they are all
+  // reachable or none of them are.
+  for (const g of groups.values()) g.live = g.rules.some(r => live.has(r));
   return [...groups.values()];
 }
 // Every combination, each a complete rule list. Order inside a list is the order
@@ -56,11 +101,16 @@ export function replacementGroups() {
 //
 // Always at least one list — with no rules at all that is the empty one, which
 // is exactly what a run with nothing to replace should apply.
-export function replacementVariations() {
+export function replacementVariations(text) {
   let combos = [[]];
-  for (const g of replacementGroups()) {
+  for (const g of replacementGroups(text)) {
     const next = [];
-    for (const c of combos) for (const r of g.rules) next.push(c.concat([r]));
+    // A group that cannot fire still rides along in every list — the run
+    // applies it and it finds nothing — it just does not multiply the run.
+    // Kept rather than dropped because "cannot fire" is judged from the text
+    // this surface can see, and the built graph holds text it cannot.
+    if (!g.live) for (const c of combos) next.push(c.concat(g.rules));
+    else for (const c of combos) for (const r of g.rules) next.push(c.concat([r]));
     combos = next;
   }
   const order = new Map(replacements.map((r, i) => [r, i]));
@@ -68,8 +118,8 @@ export function replacementVariations() {
   return combos.map(c => c.slice().sort((a, b) => at(a) - at(b)));
 }
 // How many prompts a run will produce.
-export function variationCount() {
-  return replacementGroups().reduce((n, g) => n * g.rules.length, 1);
+export function variationCount(text) {
+  return replacementGroups(text).reduce((n, g) => n * (g.live ? g.rules.length : 1), 1);
 }
 
 // What a rule substitutes. A [keyword] rule stores the picked prompt as an id,
@@ -228,7 +278,11 @@ export function paintReplacements(text, only) {
 // For a built graph: rewrite prompt-ish string inputs only. Model, sampler,
 // filename and numeric-ish keys are skipped — a rule meant for prose would
 // otherwise rename a checkpoint.
-const SKIP_KEY = /_name$|name$|filename|ckpt|lora|vae|sampler|scheduler|model|path|url|format|extension|seed|width|height|steps|cfg/i;
+// Exported because the form asks the same question of its own fields when it
+// works out which rules a run can even reach — the two must agree, or a rule
+// counted as live here would be skipped there and multiply the queue for
+// nothing.
+export const SKIP_KEY = /_name$|name$|filename|ckpt|lora|vae|sampler|scheduler|model|path|url|format|extension|seed|width|height|steps|cfg/i;
 export function applyReplacementsToNodes(prompt, only) {
   if (!(only || activeReplacements()).length) return prompt;
   for (const node of Object.values(prompt || {})) {

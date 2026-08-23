@@ -21,6 +21,7 @@
 import { fileUrl } from '../api.js';
 import { autosize } from '../autosize.js';
 import MediaBrowser from './MediaBrowser.js';
+import { SKIP_KEY } from '../replacements.js';
 
 const { reactive, ref, computed, watch, inject, provide } = window.Vue;
 
@@ -80,6 +81,33 @@ export const loraWords = s => {
   return out;
 };
 export const ctype = f => (f.control && f.control.type) || 'text';
+
+// ── What the replacement rules have to work on ────────────────────────────
+// Every string a run will hand to applyReplacementsToNodes, as far as the form
+// can see it — which is what decides whether several rules for one keyword are
+// really variations of each other or N ways of changing nothing.
+//
+// Hidden fields count. A field switched off here is not absent from the graph;
+// it carries its own value into it, and a rule finds it there. Numbers,
+// toggles, combos, media paths and lora rows do not: those are the inputs
+// applyReplacementsToNodes skips, and a checkpoint filename that happens to
+// contain a rule's find is not that rule firing. It skips by input name too,
+// so the field's widget goes through that very same SKIP_KEY rather than a
+// second opinion about which inputs hold prose.
+//
+// Lives here rather than in replacements.js because this is the component that
+// knows what a field is; the rules module knows only text.
+const TEXTY = new Set(['text', 'multiline']);
+// The graph input this field writes, falling back to its kind — a field added
+// by hand has no target and "filename" is as good an answer as the widget name
+// would have been.
+const widgetOf = f => ((f.targets || [])[0] || {}).widget || f.kind || '';
+export const replaceableText = fields => (fields || [])
+  .filter(f => f && typeof f.value === 'string' && TEXTY.has(ctype(f))
+    && f.kind !== 'seed' && !/_input$/.test(f.kind || '')
+    && !SKIP_KEY.test(widgetOf(f)))
+  .map(f => f.value)
+  .join('\n');
 
 // ── One control ────────────────────────────────────────────────────────────
 // Renders whatever the field config says this field is: a prompt box, a seed

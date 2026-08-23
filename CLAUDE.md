@@ -149,6 +149,23 @@ load-bearing:
   what an earlier one produced. The Run tab states the multiplication in red
   before the button, since finding it out at job 48 is the failure that warning
   exists to prevent.
+- **Only the keywords this run can actually reach multiply it.** Rules for a
+  keyword the prompt never mentions replace nothing, so fanning out over them
+  queues N identical jobs — which is what switching to a workflow whose prompt
+  has no `[keyword]` in it used to do, at the old count, in red. `reachableRules`
+  decides it, and `replacementGroups(text)` marks each group `live` or not;
+  a group that is not live still rides along in every rule list (the run applies
+  it and it finds nothing) but contributes no multiplication. It is reachability
+  rather than a scan, since one rule's replacement can carry another's keyword —
+  `[female]` → "…, `[hair]`, …" makes `[hair]` live in a prompt that never said
+  it — and it errs towards live, because counting a variation that changes
+  nothing is cheaper than dropping one that would have. The text it judges
+  against is `replaceableText(cfg.fields)` in WorkflowFields: every text field
+  the form holds, hidden ones included (they still carry their value into the
+  graph) and everything `applyReplacementsToNodes` skips left out, through the
+  same exported `SKIP_KEY`. Rules that are set and cannot fire get a quiet line
+  under the red one rather than silence, or the multiplication that stopped
+  appearing has nowhere to say why.
 - **The list is sorted for reading, never for running.** Rows render through a
   sorted view carrying each rule's real index; the stored array keeps the order
   it was typed in, which is the order it executes in. Alphabetical puts a

@@ -20,7 +20,7 @@ import { store, showToast } from '../store.js';
 import { api, fileUrl, thumbUrl } from '../api.js';
 import MediaToolsMenu from './MediaToolsMenu.js';
 import MediaTile from './MediaTile.js';
-import WorkflowFields, { ctype, shortLora, canonLora, loraWords } from './WorkflowFields.js';
+import WorkflowFields, { ctype, shortLora, canonLora, loraWords, replaceableText } from './WorkflowFields.js';
 import ReplacementRules from './ReplacementRules.js';
 import { activeReplacements, applyReplacements, applyReplacementsToNodes, loadReplacements,
   replacementGroups, replacementVariations, replacementText } from '../replacements.js';
@@ -1245,10 +1245,14 @@ export default {
       // out over them: one job per combination, and with a multi-file pick as
       // well, one per file per combination. Naming each job by the choices it
       // carries is what makes a screen of them tell you anything.
-      const variations = replacementVariations();
+      // Judged against the text this form is actually going to send: rules for a
+      // keyword the prompt does not contain are not alternatives, they are N ways
+      // of producing the same prompt.
+      const replText = replaceableText(cfg.fields);
+      const variations = replacementVariations(replText);
       // Only the keywords with something to choose between get named: a label
       // repeating every rule in the list would be the same on every job.
-      const multi = new Set(replacementGroups().filter(g => g.rules.length > 1).map(g => g.key));
+      const multi = new Set(replacementGroups(replText).filter(g => g.live && g.rules.length > 1).map(g => g.key));
       const labelFor = (v, n) => (variations.length < 2 ? '' :
         '#' + (n + 1) + '/' + variations.length + ' · ' + v
           .filter(r => multi.has(String(r.from).trim().toLowerCase()))
@@ -1436,19 +1440,34 @@ export default {
       wfLib.busy = false;
     }
 
+    const andList = names => (names.length === 1 ? names[0]
+      : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1]);
     // Several enabled rules for one keyword multiply the run out. It is the
     // kind of thing that is obvious once and expensive to rediscover at run 48,
     // so the number is stated before the button rather than after it.
+    //
+    // Counted over the same groups remix() will fan out over — the live ones,
+    // for the text this form holds now. A warning built from the rule list alone
+    // said ×6 for a workflow whose prompt mentions none of the keywords, and the
+    // run agreed with it: six identical jobs.
     const variationWarn = computed(() => {
-      const groups = replacementGroups().filter(g => g.rules.length > 1);
+      const groups = replacementGroups(replaceableText(cfg.fields)).filter(g => g.live && g.rules.length > 1);
       if (!groups.length) return null;
       const variations = groups.reduce((n, g) => n * g.rules.length, 1);
       const jobs = Math.max(1, batchCount.value);
-      const names = groups.map(g => g.label);
-      const list = names.length === 1 ? names[0]
-        : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+      const list = andList(groups.map(g => g.label));
       return { list, variations, jobs, total: jobs * variations,
                runs: jobs * variations * (parseInt(runCount.value, 10) || 1) };
+    });
+    // The other half of the same question. A keyword with two rules that this
+    // prompt never mentions used to be the reason for a ×2 nobody asked for;
+    // now it is the reason for a ×2 not appearing, and silence about that is how
+    // "why did it stop running six of them?" happens. Quiet rather than red —
+    // nothing here is about to cost anything.
+    const idleVariations = computed(() => {
+      const names = replacementGroups(replaceableText(cfg.fields))
+        .filter(g => !g.live && g.rules.length > 1).map(g => g.label);
+      return names.length ? andList(names) : '';
     });
 
     // The prompt the rules will rewrite, for the editor to preview.
@@ -1456,7 +1475,7 @@ export default {
       const f = (cfg.fields || []).find(x => x.kind === 'prompt' && x.enabled && !x.variant);
       return f && f.value != null ? String(f.value) : '';
     });
-    return { promptFieldText, promptChoice, pickWorkflow, resolvePromptChoice, variationWarn,
+    return { promptFieldText, promptChoice, pickWorkflow, resolvePromptChoice, variationWarn, idleVariations,
       store, src, tab, runCount, batchCount, workflows, wf, wfGroups, cfg, selectedPreset, scSaving, scSaved, canShortcut, shortcutHint, saveShortcut, deleteShortcut, isShortcut, currentWfLabel, currentWfShort,
       canUpdateWf, wfUpdating, wfUpdated, updateWorkflow, meta, job, isVideo, mediaUrl, toolsMenu, toolItem, remix, cancelJob, close, saveMsg, nodeFilter, saveLog, filteredNodes, nodeInputs,
       nodeEdits, editVal, setEdit,
@@ -1568,6 +1587,10 @@ export default {
               This will multiply {{ variationWarn.jobs }} job{{ variationWarn.jobs === 1 ? '' : 's' }}
               by {{ variationWarn.variations }} variations, resulting in
               <b>{{ variationWarn.total }} jobs</b> ({{ variationWarn.runs }} runs).
+            </div>
+            <div v-if="idleVariations" class="rmx-varidle">
+              Variations for <b>{{ idleVariations }}</b> are set, but this prompt doesn't use
+              {{ idleVariations.indexOf(' and ') < 0 ? 'it' : 'them' }} — so they don't multiply the run.
             </div>
             <div class="rmx-run">
               <select class="rmx-inp" v-model="runCount" style="width:70px" title="Number of runs"><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option><option value="5">5×</option><option value="10">10×</option><option value="20">20×</option></select>
