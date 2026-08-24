@@ -229,16 +229,23 @@ select.rmx-inp{cursor:pointer}
 .rmx-repl-dot{width:8px;height:8px;border-radius:50%;display:block}
 .rmx-repl-dot.off{opacity:.22}
 /* "2/3" — one of several rules that find the same thing, which a run turns into
-   a job each. The track only opens when something in the list is actually
-   varying; every row keeps the cell either way (an empty span where there is no
-   tag) so the columns still agree with each other. */
+   a job each — and the button that adds the next one, since the cell that says
+   what the group is is the one place with the group already in hand. The track
+   only opens once some row has something to find; a row with nothing typed in it
+   keeps the empty cell (there is nothing there to vary) so the columns still
+   agree with each other. */
 .rmx-repl-list:has(.rmx-varn) .rmx-repl-row{
   grid-template-columns:8px auto minmax(0,1fr) auto minmax(0,1fr) 36px auto;
 }
 .rmx-varn{
-  font-size:10px;line-height:1;padding:3px 4px;border-radius:999px;text-align:center;
-  background:#3a2a12;color:#ffb340;border:1px solid #5a4020;white-space:nowrap;
+  font:inherit;font-size:10px;line-height:1;padding:4px;border-radius:999px;text-align:center;
+  background:#3a2a12;color:#ffb340;border:1px solid #5a4020;white-space:nowrap;cursor:pointer;
 }
+.rmx-varn:hover{background:#4a3516;border-color:#ffb340}
+/* No group yet: the same cell and the same click, dressed down — nothing is
+   varying here, so nothing should look as though it is. */
+.rmx-varn-add{background:#2a2a2c;color:#8e8e93;border-color:#3a3a3c;font-size:12px;padding:3px 4px}
+.rmx-varn-add:hover{background:#3a2a12;color:#ffb340;border-color:#5a4020}
 .rmx-repl-swap{padding:6px 9px;color:#0a84ff}
 .rmx-repl-del{width:30px;padding:6px 0;background:#3a1e1e;color:#e06c6c;border:1px solid #5a2a2a;border-radius:8px;cursor:pointer;font-size:12px}
 .rmx-repl-del:hover{border-color:#e06c6c}

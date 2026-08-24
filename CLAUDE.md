@@ -183,6 +183,18 @@ load-bearing:
   it was typed in, which is the order it executes in. Alphabetical puts a
   keyword's variations next to each other, and a row with nothing typed yet
   sorts last so a new one does not jump away from the button that made it.
+- **The `2/3` tag is the control that grows its own group.** It is the one cell
+  that already knows what the group is, so clicking it adds another rule for the
+  same find, holding the next prompt off that keyword's shelf that no sibling —
+  switched off ones included — has taken. A row with no group yet shows a `＋`
+  in the same cell, since the second rule is what *makes* a group and having to
+  know that in advance is what this saves; a row with nothing to find keeps the
+  empty cell. The new rule is appended, never spliced in: the tag's number is
+  its place in the stored list, so inserting one would renumber its neighbours
+  and shift every colour after it. What moves is the display order, which places
+  it just after the last of its siblings rather than at the bottom of the list,
+  out of sight of the tag that made it. It inherits the source row's switch, so
+  adding to a group that is off does not quietly start it running.
 - **The find box offers the keywords rather than asking you to remember them** —
   the ones this prompt actually contains first, since only a rule for one of
   those changes this run, then the library's categories and any keyword another

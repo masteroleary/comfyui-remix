@@ -216,6 +216,73 @@ export default {
       return m;
     });
     const variantTag = r => variantOf.value.get(r) || null;
+    // Every rule that finds the same thing, in list order — the tag's group plus
+    // any switched-off row sharing the keyword. Off counts here where it does
+    // not in the tag: a variation behind an unticked box is still one of the
+    // answers on file, and offering its prompt again would make two rows that
+    // say the same thing.
+    const siblingsOf = (r) => {
+      const k = foldTok(r && r.from);
+      return k ? replacements.filter(x => foldTok(x.from) === k) : [];
+    };
+    // The next answer the keyword's shelf has that none of them has taken,
+    // walked in the picker's own order so "next" means the next one down the
+    // dropdown rather than an order only this knows. Nothing left — or a
+    // free-text rule, which has no shelf — leaves the new row unpicked rather
+    // than repeating one.
+    const nextPromptFor = (r, sibs) => {
+      if (!isKeywordRule(r)) return null;
+      const taken = new Set(sibs.map(x => x.promptId).filter(Boolean));
+      for (const g of promptsMatching(keywordOf(r), '').groups) {
+        for (const p of g.prompts) if (!taken.has(p.id)) return p;
+      }
+      return null;
+    };
+    // The tag states the group, so the tag is also what grows it: one more rule
+    // for the same find, holding the next prompt along. A row with no group yet
+    // gets the same cell as a ＋, because the second rule is what makes a group
+    // and having to know that in advance is the thing this saves.
+    //
+    // Appended, never spliced in. The tag's number is the rule's place in the
+    // stored list — which is the order a run applies them in — so inserting one
+    // in the middle would renumber its neighbours and shift every colour after
+    // it for nothing. What moves instead is the display order: the new row takes
+    // a place just after the last of its siblings, so it lands beside them
+    // rather than at the bottom of the list, out of sight of the tag that made
+    // it. The switch is inherited: adding to a group that is switched off should
+    // not quietly start it running.
+    function addVariation(r) {
+      const from = String(r && r.from ? r.from : '').trim();
+      if (!from) return;
+      const sibs = siblingsOf(r);
+      const p = nextPromptFor(r, sibs);
+      replacements.push({ from, to: p ? p.text : '', on: !!(r && r.on), promptId: p ? p.id : '' });
+      const nu = replacements[replacements.length - 1];
+      // Fractional positions on purpose: the map holds places in the display
+      // order, not indices, so the new row can be given one *between* the last
+      // of its siblings and whatever follows them without renumbering anything.
+      // Halfway rather than a fixed step — a fixed step ties with the next row
+      // the second time the same group is added to, and a tie falls back to list
+      // order, which is exactly where this is trying not to put it.
+      const order = sortOrder.value;
+      if (order) {
+        let at = -Infinity;
+        for (const s of sibs) if (order.has(s)) at = Math.max(at, order.get(s));
+        if (Number.isFinite(at)) {
+          let next = Infinity;
+          for (const pos of order.values()) if (pos > at && pos < next) next = pos;
+          order.set(nu, Number.isFinite(next) ? (at + next) / 2 : at + 0.5);
+        }
+      }
+      saveReplacements();
+    }
+    const variantTitle = (r) => {
+      const t = variantTag(r);
+      const kw = String(r && r.from ? r.from : '').trim();
+      return t
+        ? 'One of ' + t.of + ' variations for ' + kw + ' — a run queues a job for each. Click to add another.'
+        : 'Add another rule for ' + kw + ' — two rules that find the same thing are variations, and a run queues a job for each.';
+    };
     // Three states, not two. ruleLive is false for a rule that is switched off
     // AND for a row with nothing typed in it yet — telling someone their brand
     // new empty row to switch it on answers a question they did not ask, and
@@ -232,6 +299,7 @@ export default {
       addRepl, delRepl, swapRepl, toggleReplAll, pickPrompt,
       menuFor, openMenu, closeMenu, menuList, chooseKeyword, ruleFor, onFindEsc,
       painted, ruleColor, ruleLive, dotTitle, rows, variantTag, variations, onPanelToggle,
+      addVariation, variantTitle,
     };
   },
   template: `
@@ -290,8 +358,13 @@ export default {
               </select>
               <input v-else type="text" class="rmx-inp" placeholder="replace with" v-model="e.r.to" @change="saveReplacements">
               <!-- One of several rules for the same keyword. They sort together,
-                   so saying which of the group this is completes the picture. -->
-              <span v-if="variantTag(e.r)" class="rmx-varn" :title="'One of ' + variantTag(e.r).of + ' variations for ' + e.r.from + ' — a run queues a job for each'">{{ variantTag(e.r).n }}/{{ variantTag(e.r).of }}</span>
+                   so saying which of the group this is completes the picture —
+                   and clicking it adds the next one. A row with no group yet
+                   gets the same cell as a ＋; a row with nothing to find keeps
+                   the empty one, since there is nothing there to vary. -->
+              <button v-if="e.r.from && e.r.from.trim()" type="button" class="rmx-varn"
+                      :class="{'rmx-varn-add': !variantTag(e.r)}" :title="variantTitle(e.r)"
+                      @click="addVariation(e.r)">{{ variantTag(e.r) ? variantTag(e.r).n + '/' + variantTag(e.r).of : '＋' }}</button>
               <span v-else class="rmx-varn-gap"></span>
               <button type="button" class="rmx-repl-del" title="Delete rule" @click="delRepl(e.i)">✕</button>
             </div>
