@@ -60,6 +60,9 @@ export const store = reactive({
 
   // ── Chrome ──
   blurOn: readLs('archiveBlur', '1') === '1',
+  // Reset to '1' on logout, from two places: api.js's logout() covers the SPA, and
+  // auth-ui.js covers inspect.html -- a plain script that cannot import from here, so
+  // it spells the key out literally. Rename this and that copy silently stops working.
   safeOn: readLs('archiveSafe', '1') === '1',
   // How big the browse grid draws its tiles. Read back through the allowed set
   // rather than trusted: it comes out of localStorage, and an unknown value

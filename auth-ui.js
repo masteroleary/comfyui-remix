@@ -27,6 +27,18 @@
   document.addEventListener('click', e => {
     const btn = e.target && e.target.closest && e.target.closest('#logoutBtn');
     if (!btn) return;
+    // Safe mode back on, before anything else. It is a per-browser preference in
+    // localStorage, and the logout response only clears the *cache*
+    // (Clear-Site-Data: "cache") -- so a session that turned the filter off used to
+    // hand that state to whoever unlocked the browser next. Putting it back is also
+    // putting it to its default, so this cannot surprise anyone in the other
+    // direction. Done before the request, and outside its promise, so it happens
+    // even when the POST fails and we reload anyway.
+    //
+    // The key is spelled out here rather than imported: this file is a plain script
+    // shared by every page, not an ES module, so it cannot reach app/store.js. That
+    // is the other end of this string -- see readLs('archiveSafe') there.
+    try { localStorage.setItem('archiveSafe', '1'); } catch (err) { /* private mode, blocked storage */ }
     // Reload either way: on success the server answers the next request with the
     // lock screen, and on failure the reload surfaces whatever state we're in.
     fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' })

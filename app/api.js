@@ -3,6 +3,8 @@
 // place to be handled: when the password gate is on and a session expires, the
 // honest response is to send the browser back for the lock screen rather than let
 // views paint half-empty. Callers get plain data or a thrown Error.
+import { setSafe } from './store.js';
+
 const enc = encodeURIComponent;
 
 async function req(path, opts = {}) {
@@ -98,7 +100,19 @@ export const api = {
   saveSettings: body => post('/api/settings', body),
   status: () => req('/api/status'),
   authStatus: () => req('/api/auth/status'),
-  logout: () => post('/api/auth/logout'),
+  // Safe mode goes back on with the session. It is a per-browser preference in
+  // localStorage and the logout response only clears the *cache*, so a session that
+  // turned the filter off used to hand that state to whoever unlocked this browser
+  // next. On is also its default, so this cannot surprise anyone the other way.
+  //
+  // Here rather than in the buttons because there are three of them -- AppShell,
+  // AppToolbar, and inspect.html's own via auth-ui.js -- and this is the one call
+  // the first two share. auth-ui.js keeps its own copy: it is a plain script on a
+  // page that never loads these modules, so it cannot reach this.
+  //
+  // Before the request, not after: the reset should hold even when the POST fails,
+  // and both callers reload regardless of the outcome.
+  logout: () => { setSafe(true); return post('/api/auth/logout'); },
   recentOutputs: since => req('/api/recent-outputs' + (since ? '?since=' + enc(since) : '')),
   // The word directory honours safe mode server-side; omitting the flag lists
   // NSFW phrases even with safe mode on.
