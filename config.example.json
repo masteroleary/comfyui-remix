@@ -10,5 +10,9 @@
   "auth": {
     "enabled": false,
     "hash": ""
-  }
+  },
+  "comfyTemp": "",
+  "dockerContainer": "",
+  "maintenanceExtraTargets": [],
+  "restartCmd": ""
 }

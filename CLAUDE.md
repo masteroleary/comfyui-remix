@@ -40,7 +40,7 @@ tab.
 `/` home · `/browse/:root/:path*` grid · `/view/:root/:path+` viewer ·
 `/inspect` a file **or** a workflow · `/workflows` the library ·
 `/prompts` the reusable text · `/jobs` the run list ·
-`/settings` and `/settings/:tab` (config | privacy | security).
+`/settings` and `/settings/:tab` (config | privacy | security | clean).
 
 `/inspect` takes either `?path=…` (a file) or `?wf=<name>` (a workflow with no
 file behind it, opened from the Workflows page). With no file it drops the
@@ -50,6 +50,9 @@ which workflow it is, so changing it there would leave the two disagreeing.
 Settings is **routed pages, not a modal** — each section is linkable and survives a
 reload. `SettingsPanel.js` renders either shape: as a dialog it keeps the overlay
 and tab strip, and with `page`/`only` props it drops both and renders one section.
+**Clean** is the exception: it has nothing to save, so it is not a SettingsPanel section
+under the shared Save button but its own `MaintenancePanel.js` behind the same routed
+tile (see *Cleaning up* below).
 
 ### Shared components
 
@@ -207,6 +210,9 @@ load-bearing:
 | POST | `/api/workflows/save` | Write an image's embedded graph out as a new workflow |
 | POST | `/api/workflows/update` | Overwrite a workflow's own `.json` with the fields on screen |
 | GET/POST | `/api/settings` | Read (keys masked) / merge into config.json and hot-reload |
+| GET | `/api/maintenance/state` | Clean: the option list, the remembered ticks, the last measurement, the job and its log |
+| POST | `/api/maintenance/scan` | Clean: measure every target (deletes nothing) |
+| POST | `/api/maintenance/clean` | Clean: run the ticked selection — takes `confirm: true` as well as the selection |
 
 `/api/workflows/update` and the run path share `applyFieldConfigOverrides`, so a
 value can only ever land where a run would have put it; the rest of the graph is
@@ -249,8 +255,32 @@ Copy `config.example.json` to `config.json` and fill in your values. Every field
 - `comfyDir` — ComfyUI install directory (drives the workflow list)
 - `comfyOutput` — path to ComfyUI's output folder
 - `comfyUrl` — ComfyUI API address (default `http://127.0.0.1:8188`; used by the run proxy, WS proxy, and status checks)
-- `comfyStartCmd` — command that launches ComfyUI (shell string or `[cmd, ...args]` array); if unset, auto-detects `Start ComfyUI.bat` next to `comfyDir`. Used by the Run button's "start it now" offer (`POST /api/comfy/start`). Note: when the app itself runs as a background service, a launched GUI may be invisible (it starts in the service session).
+- `comfyStartCmd` — command that launches ComfyUI (shell string or `[cmd, ...args]` array). If unset, auto-detects: a launcher script first (`Start ComfyUI.bat` / `run_*.bat` on Windows, `start-comfyui.sh` / `start.sh` / `run.sh` elsewhere), then `main.py` run from `comfyDir` with the venv interpreter beside it if there is one. A source checkout ships no launcher, which is the usual case off Windows — that is what the `main.py` branch is for. Used by the Run button's "start it now" offer (`POST /api/comfy/start`). Note: when the app itself runs as a background service, a launched GUI may be invisible (it starts in the service session).
 - `civitaiApiKey` — API key (also settable in Settings → Config)
+- `maintenanceScript` — the cleanup script Settings → Clean drives. Defaults to
+  `tools/maintenance/wipe_media.ps1`, which ships with the repo. It must accept `-Report`.
+- `maintenanceDir` — where the request/status/report/log files for that run live
+  (default `C:\ProgramData\ComfyRemix`). **Changing this needs the task re-registered**:
+  the directory is baked into the task's action at registration while the server reads
+  the key per request, so the two silently stop agreeing and every run then reports the
+  "has not reported back" stall.
+- `comfyTemp` — ComfyUI's preview/render cache, the one location the obvious cleanup
+  misses. ComfyUI writes it beside its own code, and on a Docker install that is a
+  different tree from the bind-mounted `input`/`output` pair — so nothing under
+  `comfyDir` points at it and the app never lists it. Unset means a Clean run skips it
+  and says so; it is never guessed at.
+- `dockerContainer` — name of the ComfyUI container, if there is one. Used only to
+  verify a wipe from inside the container as well as from the host; unset skips that.
+- `maintenanceExtraTargets` — what `-Scope Extended` covers. **Empty by default**, and
+  deliberately so: these are source or training material that is ComfyUI-adjacent but
+  not generated, so nothing here is regenerable and nothing is assumed. Each entry is
+  either a path string or `{ path, label, childSubfolder }`, where `childSubfolder`
+  sweeps one level down and takes that subfolder of each child (how a training-set root
+  is laid out). Not settable from Settings, for the same reason `maintenanceScript` is
+  not: these name what gets deleted, and a value arriving over HTTP could redirect the
+  wipe.
+- `maintenanceSelection` — the remembered ticks. Written by the Clean page on Run; not
+  meant to be edited by hand.
 - `mediaCachePolicy` — how long the browser may keep media: `nostore` (default), `validate`, or `day`. Whitelisted server-side before it reaches a `Cache-Control` header. Note that **no header deletes files at a deadline** — `max-age` governs reuse, not retention — so only `nostore` keeps media out of the cache at all. Logout also sends `Clear-Site-Data`, which Safari ignores.
 - `nsfwTermsB64` — the content-filter word list safe mode matches on (see below)
 - `auth` — optional password gate: `{ "enabled": true, "hash": "scrypt$<salt>$<key>" }`, managed from Settings → Security. Only the hash is stored, and the gate stays off unless a hash exists. While on, everything (pages, APIs, `/file`, `/thumb`, the WS proxy) is refused until a session cookie arrives — see below.
@@ -266,6 +296,80 @@ Caveats when running under a service account (e.g. Windows SYSTEM) or otherwise 
 
 - Service accounts don't inherit your per-user `PATH`, so `ffmpeg` / `ffprobe` may not resolve by name. server.js locates them and stores absolute paths at startup (`findFfBin`; override with `ffmpegDir` in config). A bare `ffprobe` invocation fails silently under a service account and video metadata comes back `null`.
 - Use **one** autostart mechanism only — two instances collide on port 8080 (`EADDRINUSE`).
+
+## Cleaning up (Settings → Clean)
+
+`/settings/clean` is the console questions of the cleanup script as checkboxes:
+Explorer's thumbnail cache, the browser caches, the Windows breadcrumb layer, the
+generated-media folders, the Recycle Bin, the shadow copies, and a closing ReTrim. Every
+row carries the file count and size the script measured, because a question answered
+without knowing the cost is the one that deletes the wrong thing. There is no Save button
+— the ticks are remembered **on Run**, since the selection that ran is the one worth
+coming back to.
+
+**The server does none of the work, deliberately.** It runs as SYSTEM here, and SYSTEM is
+the wrong account for this even though it is the privileged one: every per-user store the
+script clears is found through `%LOCALAPPDATA%` / `%APPDATA%`, which under SYSTEM point
+at an empty system profile — the pass would clear nothing and report success. Its
+thumbnail pass also restarts `explorer.exe`, and an explorer started from session 0 comes
+back in session 0, leaving the signed-in desktop with no shell. So the endpoints write a
+request file and poke an on-demand scheduled task that runs **as the signed-in user with
+`RunLevel Highest`** — already elevated, so no UAC prompt is ever raised, which is the
+whole reason the button works from a phone. The cost is that it needs somebody signed in;
+the page says so rather than reporting a run that never happened.
+
+- **Nothing from the browser reaches a command line.** `maintParams` in server.js is the
+  only place a tick becomes a flag, and the wrapper checks every name it is handed against
+  its own allowlist before binding them as real parameters. The request's `kind` decides
+  the mode, so a scan cannot be talked into deleting.
+- **`-Only` or `-SkipMedia`, never neither.** Without one of the two the script wipes all
+  four core media targets, so an empty selection must never be able to read as "no filter".
+- **The measurements come from the script, not from the page.** Its `-Report` mode walks
+  the same target list the run does and writes it as JSON. A second target list on the
+  app's side is exactly how the easily-missed target got missed in the first place — which
+  is also why the LoRA datasets are one row: `-Only` takes one token per key, so the page
+  offers one checkbox per flag it can actually send.
+- **A busy ComfyUI queue is a warning before the button, not a surprise in the log.** A
+  non-interactive run refuses the media targets outright while the queue is working
+  (deleting temp mid-job yanks the previews out from under it), so the scan carries the
+  queue state back and the page says so up front.
+
+The wrapper and the one-time registration script live in `scripts/`, which is gitignored
+on this install — see `CLAUDE.local.md` for the task name and the setup command.
+
+## Same-origin guard
+
+Every response carries `Access-Control-Allow-Origin: *`, which means a page on any
+site the user has open may POST here — and no endpoint asks who called. That was
+enough to fire `/api/maintenance/clean` or `/api/bulk-delete` at `127.0.0.1` with
+no click involved. The firewall, Tailscale and the client certificates all sit
+*upstream* of this: the request starts inside the machine, in a browser that is
+already past every one of them.
+
+`sameOriginOk` in server.js is therefore checked before every route, alongside the
+password gate, and refuses `POST`/`PUT`/`PATCH`/`DELETE` with a 403 unless the
+request is same-origin. Three things about it are load-bearing:
+
+- It compares `Origin` against the **`Host` of the same request**, not against a
+  list of approved hostnames. The app answers on the tailnet name, the Tailscale
+  IP, the LAN IP and localhost, over two ports; a list would be wrong the first
+  time a device or a port changed, while "the page was served by whoever it is now
+  talking to" is true for all of them at once — and stays true for a device added
+  later.
+- **`Origin`, not `Sec-Fetch-Site`.** Safari only sends `Sec-Fetch-*` from 16.4, so
+  keying on it would lock an older iPhone out of its own app. `Origin` has ridden
+  on every cross-origin POST for well over a decade.
+- **A missing `Origin` is allowed; `null` is not.** Nothing sends no header except
+  a non-browser client (curl, the PowerShell tooling), and a browser cannot be made
+  to omit it on a POST — so the absent case is not a way in. `null` is what a
+  sandboxed iframe sends, and folding the two together hands the hole straight back.
+
+GETs are deliberately untouched: they change nothing, and the media, thumbnails and
+the WebSocket proxy all have to keep working.
+
+Note the wildcard CORS header itself is still `*`, so a cross-origin page can still
+*read* a GET response (a listing, prompt text). That is a separate call from this
+one and has not been made.
 
 ## Password gate
 

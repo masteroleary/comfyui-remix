@@ -50,6 +50,8 @@ export default {
   setup(props, { emit }) {
     const s = reactive({
       tab: 'config',
+      restarting: false,   // the button is busy from the click until the port answers
+      restartMsg: '',
       loading: false,
       saving: false,
       // Did the two loads actually succeed? Every field below defaults to
@@ -199,6 +201,47 @@ export default {
     // Typing a new one countermands the removal.
     const authTyped = () => { if (s.auth.clear) s.auth.clear = false; };
 
+    // ── Restart ──
+    // The server answers, then goes. So the fetch resolving is not the finish line and a
+    // failed fetch afterwards is not an error -- it is the expected middle. What tells us
+    // it worked is the port answering again, which is why this polls rather than trusting
+    // the reply, and reloads only once something is actually there to load.
+    async function restartServer() {
+      if (s.restarting) return;
+      if (!window.confirm('Restart the server?\\n\\nThe page will reconnect on its own. Anything generating keeps going — ComfyUI is a separate process — but this window loses its live connection for a few seconds.')) return;
+      s.restarting = true;
+      s.restartMsg = 'Asking the server to restart…';
+      try {
+        await api.restartServer();
+      } catch (e) {
+        // A dropped connection here means it went down mid-reply, which is success.
+        // Only a real refusal (a 4xx/5xx body) is worth stopping for.
+        if (/^HTTP [45]|Could not start the restart helper/.test(e.message)) {
+          s.restarting = false;
+          s.restartMsg = '';
+          // A 404 is not a refusal, it is an age gap: the endpoint lives in server.js,
+          // while this button is served from disk and appeared the moment the file did.
+          // Saying "refused" for that sends you looking for a permissions problem.
+          showToast(/^HTTP 404/.test(e.message)
+            ? 'This server is running code from before the Restart button existed. Restart it once by hand — then this button works from here on.'
+            : 'Restart refused: ' + e.message, 9000);
+          return;
+        }
+      }
+      s.restartMsg = 'Restarting — waiting for the server to come back…';
+      const deadline = Date.now() + 90000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 1500));
+        try {
+          const r = await fetch('/api/auth/status', { cache: 'no-store' });
+          if (r.ok || r.status === 401) { s.restartMsg = 'Back up — reloading…'; location.reload(); return; }
+        } catch { /* still down, keep waiting */ }
+      }
+      s.restarting = false;
+      s.restartMsg = '';
+      showToast('The server did not come back within 90s. Check restart.log in the app folder.', 9000);
+    }
+
     // ── Save ──
     async function save() {
       if (s.saving) return;
@@ -306,7 +349,7 @@ export default {
       keyInput, keyClear, pathState, browse, pickerSeed, picked,
       nsfwSorted, addTag, removeTag,
       stored, usable, editing, minHint, authChange, authRemove, authTyped,
-      save, close,
+      save, close, restartServer,
     };
   },
   template: `
@@ -354,6 +397,20 @@ export default {
               <button class="set-clr set-browse" title="Browse server folders" @click="browse(f.k)">📁</button>
             </div>
             <div v-if="f.hint" class="set-hint">{{ f.hint }}</div>
+          </div>
+
+          <!-- Server actions, not settings: nothing here is saved, so it sits below the
+               fields rather than above the Save button it has nothing to do with. -->
+          <div class="set-sec">Server</div>
+          <div class="set-blurb">
+            Applies changes to <code>server.js</code>. The page reconnects on its own.
+            Generations keep running — ComfyUI is a separate process.
+          </div>
+          <div class="set-actions">
+            <button class="set-btn" :disabled="s.restarting" @click="restartServer">
+              {{ s.restarting ? 'Restarting…' : 'Restart server' }}
+            </button>
+            <span v-if="s.restartMsg" class="set-hint set-restart-msg">{{ s.restartMsg }}</span>
           </div>
         </div>
 

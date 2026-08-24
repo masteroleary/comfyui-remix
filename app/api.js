@@ -80,6 +80,19 @@ export const api = {
   nsfwTerms: () => req('/api/nsfw-terms'),
   saveNsfwTerms: terms => post('/api/nsfw-terms', { terms }),
 
+  // Clean (Settings → Clean). The scan and the run both come back immediately — they
+  // happen in a scheduled task, not in the request — so state is what actually reports
+  // progress, and the page polls it while a run is going.
+  maintenanceState: () => req('/api/maintenance/state'),
+  maintenanceScan: () => post('/api/maintenance/scan'),
+  // confirm is sent as a separate field from the selection: a selection alone is a
+  // preference, and this endpoint deletes permanently.
+  maintenanceClean: selection => post('/api/maintenance/clean', { confirm: true, selection }),
+
+  // Restart the server. Answers before it goes, so a rejected fetch after this call is
+  // the expected shape of success, not a failure -- the caller polls for the port instead.
+  restartServer: () => post('/api/restart', {}),
+
   // App state
   settings: () => req('/api/settings'),
   saveSettings: body => post('/api/settings', body),

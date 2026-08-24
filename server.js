@@ -30,10 +30,60 @@ const ROOT = process.argv[3] ? path.resolve(process.argv[3]) : (config.mediaDir 
 // the app exposes it as the single "Favorites" tab (no separate Archive tab).
 const FAVORITES_DIR = ROOT;
 
+// ── Path containment ───────────────────────────────────────────────────────
+// Every "is this inside a media root?" guard goes through these, and both
+// halves are load-bearing:
+//   * Case is folded only where the filesystem folds it. Lowercasing both
+//     sides unconditionally is wrong off Windows: on Linux /srv/MEDIA and
+//     /srv/media are different directories, so a path outside the root passes
+//     the guard and is then listed, moved or deleted at its real case.
+//   * A prefix match is not containment. ".../media-private" starts with
+//     ".../media" and is nowhere inside it, so the boundary has to land on a
+//     separator, or be the root itself.
+// normPath is also the key these handlers dedupe paths by, which is the same
+// question asked twice: two spellings name one file only where the filesystem
+// says they do.
+const IS_WIN = process.platform === 'win32';
+function normPath(s) {
+  const raw = String(s == null ? '' : s);
+  // Only Windows treats a backslash as a separator. Folding it everywhere makes
+  // the guard answer a different question from the one the filesystem answers:
+  // on POSIX a backslash is an ordinary filename character, so rewriting it
+  // invents a boundary that is not there.
+  let p = (IS_WIN ? raw.replace(/\\/g, '/') : raw).replace(/\/+$/, '');
+  if (!p && /^[\\/]/.test(raw)) p = '/';   // the POSIX root trims away to nothing otherwise
+  return IS_WIN ? p.toLowerCase() : p;
+}
+// True when "child" is "parent" itself, or lives under it.
+function isInside(child, parent) {
+  const c = normPath(child), p = normPath(parent);
+  if (!p) return false;
+  return c === p || c.startsWith(p === '/' ? '/' : p + '/');
+}
 let COMFY_OUTPUT = config.comfyOutput || 'D:\\ComfyUI-Easy-Install\\ComfyUI\\output';
 let COMFY_DIR = config.comfyDir || 'D:\\ComfyUI-Easy-Install\\ComfyUI';
 // Mutable so the Settings panel can hot-reload them without a server restart.
 let COMFY_URL = config.comfyUrl || 'http://127.0.0.1:8188';
+
+// The two roots every media handler is allowed to touch. Declared *after* the
+// roots rather than beside the helpers above, because they close over a "let"
+// that Settings reassigns — up there the ordering was load-bearing and nothing
+// said so, and any top-level use added in between would have thrown.
+const inMediaRoots = p => isInside(p, ROOT) || isInside(p, COMFY_OUTPUT);
+const isMediaRoot = p => normPath(p) === normPath(ROOT) || normPath(p) === normPath(COMFY_OUTPUT);
+// Containment above is lexical, which a symlink defeats: a link sitting inside
+// a media root may point anywhere, and a string comparison sees only the link's
+// own path. Handlers that delete or move therefore resolve the real path and
+// require *that* to be inside a root as well. A link pointing within the roots
+// still works; one pointing out of them is refused, which is the entire point.
+// A path that does not resolve (a destination not created yet) falls back to
+// the lexical answer rather than inventing a failure.
+function realInMediaRoots(p) {
+  if (!inMediaRoots(p)) return false;
+  let real;
+  try { real = fs.realpathSync.native(p); } catch { return true; }
+  return inMediaRoots(real);
+}
 
 // Host/port of the ComfyUI API for the raw HTTP/WS proxies
 function comfyHostPort() {
@@ -316,7 +366,6 @@ function extractPngMetadata(filePath, cb) {
 // not see per-user WinGet Links, and systemd/launchd units do not see Homebrew
 // or /usr/local — so resolve to an absolute path at startup (config `ffmpegDir`
 // overrides), falling back to the bare name for a normal PATH lookup.
-const IS_WIN = process.platform === 'win32';
 const FF_INSTALL_HINT = IS_WIN ? 'winget install Gyan.FFmpeg'
   : process.platform === 'darwin' ? 'brew install ffmpeg'
   : 'apt install ffmpeg';
@@ -342,6 +391,37 @@ function findFfBin(name) {
   for (const c of candidates) { try { if (fs.existsSync(c)) return c; } catch {} }
   return name;
 }
+// Resolve a bare command along PATH ourselves. Two reasons never to hand one
+// to spawn: a service account may not have it on PATH at all (the same reason
+// findFfBin exists), and libuv searches the child's *cwd* before PATH — with
+// cwd set to comfyDir, a planted comfyDir/python.exe would win.
+function resolveOnPath(name) {
+  const exts = IS_WIN ? String(process.env.PATHEXT || '.EXE').split(';').filter(Boolean) : [''];
+  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const p = path.join(dir, name + ext);
+      try { if (fs.statSync(p).isFile()) return p; } catch {}
+    }
+  }
+  return null;
+}
+// The interpreter for a source checkout: a venv beside main.py first (it has
+// ComfyUI's dependencies installed), then whatever PATH offers.
+function findPython() {
+  const cands = IS_WIN
+    ? [path.join(COMFY_DIR, 'venv', 'Scripts', 'python.exe'),
+       path.join(COMFY_DIR, '.venv', 'Scripts', 'python.exe'),
+       path.join(path.dirname(COMFY_DIR), 'python_embeded', 'python.exe')]   // ComfyUI_windows_portable
+    : [path.join(COMFY_DIR, 'venv', 'bin', 'python'),
+       path.join(COMFY_DIR, '.venv', 'bin', 'python')];
+  for (const c of cands) { if (fs.existsSync(c)) return c; }
+  return resolveOnPath(IS_WIN ? 'python' : 'python3') || resolveOnPath(IS_WIN ? 'py' : 'python');
+}
+// How many directories one /api/browse-dirs listing will return. High enough
+// that no real media folder is ever cut, low enough that a system directory
+// cannot flood the picker.
+const BROWSE_DIR_CAP = 2000;
 const FFPROBE_BIN = findFfBin('ffprobe');
 const FFMPEG_BIN = findFfBin('ffmpeg');
 
@@ -1899,6 +1979,250 @@ function jsonRes(res, data, status = 200) {
   res.end(JSON.stringify(data));
 }
 
+// ── Clean: the scan and the run behind Settings → Clean ────────────────────
+// None of the work happens in this process, and that is deliberate. The server runs as
+// SYSTEM (the ComfyRemixAutoStart boot task) and SYSTEM is the wrong account for it:
+// every per-user store wipe_media.ps1 clears — the Explorer thumbnail cache, the Edge
+// and Chrome caches, Recent/jump lists/Timeline/WebCache — is found through
+// %LOCALAPPDATA% / %APPDATA%, which under SYSTEM point at an empty system profile, so
+// the pass would clear nothing and report success. Its thumbnail pass also restarts
+// explorer.exe, and an explorer started from session 0 comes back in session 0, leaving
+// the signed-in desktop with no shell.
+//
+// So this writes a request file and pokes a scheduled task that runs as the signed-in
+// user with RunLevel Highest — elevated, therefore no UAC prompt for anyone to walk over
+// and click, which is the entire reason the button can work from a phone. The task, the
+// allowlist that guards it and the one-time setup live in scripts\maintenance_run.ps1
+// and scripts\register_maintenance_task.ps1.
+const MAINT_TASK = 'ComfyRemixMaintenance';
+const maintDir = () => config.maintenanceDir || 'C:\\ProgramData\\ComfyRemix';
+const maintFile = name => path.join(maintDir(), name);
+
+// One row per flag wipe_media.ps1 actually takes. The server owns this list rather than
+// the page, so a checkbox can never appear that the run would reject — the same reason
+// WorkflowFields owns the controls it builds. Order follows the console's questions,
+// except that the caches come first: they are what the button is named after.
+const MAINT_OPTIONS = [
+  { key: 'thumbs', group: 'Caches', label: 'Explorer thumbnail cache',
+    sub: 'Thumbnails of everything you browsed in Explorer — they outlive the originals. Clearing this restarts Explorer.' },
+  { key: 'browsers', group: 'Caches', label: 'Browser caches (Edge + Chrome)',
+    sub: 'Every image this app served, still renderable straight out of cache. Cache only: cookies, history, logins and saved tabs survive.' },
+  { key: 'closeBrowsers', group: 'Caches', label: 'Close a running browser so its files can go', parent: 'browsers',
+    sub: 'The cache files are locked while the browser runs. Tabs come back next launch, but anything unsaved in a page is lost.' },
+  { key: 'breadcrumbs', group: 'Caches', label: 'Recent items, jump lists, Timeline, WebCache',
+    sub: 'Not the pictures — the record that they existed: paths, sizes, timestamps. Windows rebuilds all of them empty.' },
+
+  { key: 'input', group: 'Generated media', label: 'ComfyUI input', sub: 'Everything uploaded into ComfyUI as a source image.' },
+  { key: 'output', group: 'Generated media', label: 'ComfyUI output', sub: 'ComfyUI\u2019s own output folder.' },
+  { key: 'media', group: 'Generated media', label: 'App media library', danger: true,
+    sub: 'This app\u2019s library and archive root. Files committed to git are skipped.' },
+  { key: 'temp', group: 'Generated media', label: 'ComfyUI temp / render cache',
+    sub: 'Previews and temp renders. Usually the biggest of the four, pure throwaway, and the one nothing else covers.' },
+
+  { key: 'samples', group: 'Originals', label: 'Source clips and stills', danger: true,
+    sub: 'Not generated and not regenerable. Deleting these loses the originals.' },
+  { key: 'lora', group: 'Originals', label: 'LoRA training images', danger: true,
+    sub: 'The datasets behind your trained LoRAs. Not regenerable.' },
+
+  { key: 'recycle', group: 'System', label: 'Empty the Recycle Bin (C:, D:, E:)',
+    sub: 'Includes the stubs that keep each deleted file\u2019s original name and path.' },
+  { key: 'shadows', group: 'System', label: 'Delete Volume Shadow Copies', danger: true,
+    sub: 'A restore point keeps a readable copy of whatever the caches held when it was taken — clearing the live copy does not reach inside one. Costs you those rollback points.' },
+  { key: 'trim', group: 'System', label: 'Re-TRIM E: and D: afterwards', needsFreed: true,
+    sub: 'Hands the freed blocks to the SSD controller, which is what makes them unrecoverable rather than merely unlinked. ~20s. Free space will not change — that is the expected result.' },
+];
+// Which media keys map to which -Only token. Anything not in here is not a media target.
+const MAINT_ONLY = { input: 'Input', output: 'Output', media: 'Media', temp: 'Temp', samples: 'Samples', lora: 'Lora' };
+// What a first-time visitor gets ticked: the three the button is named for, and nothing
+// that deletes media.
+const MAINT_DEFAULTS = ['thumbs', 'browsers', 'breadcrumbs'];
+
+// Selection → wipe_media.ps1 parameters. The only place that mapping exists; the wrapper
+// validates the names it is handed but does not invent any.
+function maintParams(sel) {
+  const only = Object.keys(MAINT_ONLY).filter(k => sel[k]).map(k => MAINT_ONLY[k]);
+  const p = {};
+  // No media targets means -SkipMedia, never an empty -Only: without -Only *and* without
+  // -SkipMedia the script wipes all four core targets, so an empty list must not be able
+  // to read as "no filter".
+  if (only.length) p.Only = only; else p.SkipMedia = true;
+  if (!sel.recycle) p.SkipRecycleBin = true;
+  if (sel.thumbs) p.IncludeThumbCache = true;
+  if (sel.browsers) {
+    p.IncludeBrowserCache = true;
+    if (sel.closeBrowsers) p.CloseBrowsers = true;
+  }
+  if (sel.breadcrumbs) p.IncludeShellArtifacts = true;
+  if (sel.shadows) p.IncludeShadowCopies = true;
+  // ReTrim only means anything if something was freed on D: or E: — a caches-only run
+  // frees space on C:, which this never trims, so the pass would be a lie.
+  if (!(sel.trim && (only.length || sel.recycle))) p.SkipTrim = true;
+  return p;
+}
+const maintPicked = sel => MAINT_OPTIONS.some(o => o.key !== 'closeBrowsers' && o.key !== 'trim' && sel[o.key]);
+
+// The remembered ticks. Stored in config.json so they follow the account rather than the
+// browser — the run is machine-wide, and choosing it on a phone then losing it on the
+// desktop would be the wrong half to persist.
+function maintSelection() {
+  const saved = config.maintenanceSelection;
+  const out = {};
+  for (const o of MAINT_OPTIONS) {
+    out[o.key] = saved && typeof saved === 'object' ? !!saved[o.key] : MAINT_DEFAULTS.includes(o.key);
+  }
+  return out;
+}
+function maintSaveSelection(sel) {
+  // Read-then-write-the-whole-file, so a failed read must abort rather than fall
+  // through with an empty object: writing {} back over config.json drops
+  // auth.hash — silently turning the password gate off — and the API key with it.
+  // The caller turns a throw into a 500.
+  let cur;
+  try { cur = readConfigFile(); } catch (e) {
+    throw new Error('config.json is unreadable — refusing to overwrite it: ' + e.message);
+  }
+  cur.maintenanceSelection = Object.fromEntries(MAINT_OPTIONS.map(o => [o.key, !!sel[o.key]]));
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cur, null, 2));
+  reloadConfig();
+}
+
+function maintReadText(name) {
+  try { return fs.readFileSync(maintFile(name), 'utf8').replace(/^\uFEFF/, ''); } catch { return null; }
+}
+function maintReadJson(name) {
+  const t = maintReadText(name);
+  if (!t) return null;
+  try { return JSON.parse(t); } catch { return null; }
+}
+
+// What we asked the scheduler for, held until the task confirms it by writing a status
+// file with the same id. Without this, a task that never launched — which is exactly what
+// LogonType Interactive does when nobody is signed in — is indistinguishable from one
+// that has not got going yet, and the page would spin forever saying "starting".
+let maintPending = null;
+
+function maintJob() {
+  const st = maintReadJson('maintenance-status.json');
+  let job = st && st.id ? {
+    id: String(st.id), kind: st.kind || '', state: st.state || '',
+    startedAt: st.startedAt || '', endedAt: st.endedAt || '',
+    exitCode: (st.exitCode === null || st.exitCode === undefined) ? null : st.exitCode,
+    error: st.error || '', flags: st.flags || '',
+  } : null;
+  if (maintPending) {
+    if (!job || job.id !== maintPending.id) {
+      const waited = Date.now() - maintPending.at;
+      job = {
+        id: maintPending.id, kind: maintPending.kind, state: 'starting',
+        startedAt: '', endedAt: '', exitCode: null, flags: '', waitedMs: waited,
+        error: waited > 30000
+          ? 'The task was asked to run 30s ago and has not reported back. ' + MAINT_TASK +
+            ' only runs while somebody is signed in — check that, then look at ' + maintFile('maintenance.log') + '.'
+          : '',
+      };
+      if (waited > 30000) job.stalled = true;
+    } else if (job.state !== 'running') {
+      maintPending = null;
+    }
+  }
+  // A "running" that outlived the task's own two-hour ceiling was killed by the scheduler
+  // without ever writing a terminal state — and since this is what the Run button checks
+  // before it will start anything, believing it would wedge the button for good.
+  if (job && job.state === 'running' && job.startedAt) {
+    const age = Date.now() - Date.parse(job.startedAt);
+    if (age > 2.2 * 3600 * 1000) {
+      job.state = 'failed';
+      job.error = 'Still marked running after ' + Math.round(age / 3600000) +
+        'h — the task was almost certainly killed. See ' + maintFile('maintenance.log') + '.';
+    }
+  }
+  return job;
+}
+
+// The tail, not the file: a wipe over a full library prints a line per target, and the
+// page re-reads this every couple of seconds while it runs.
+function maintLog() {
+  const t = maintReadText('maintenance.log');
+  if (!t) return '';
+  const lines = t.split(/\r?\n/);
+  return lines.length > 500 ? lines.slice(-500).join('\n') : lines.join('\n');
+}
+
+function maintTaskInfo(cb) {
+  if (!IS_WIN) { cb({ available: false, reason: 'Cleaning runs through a Windows scheduled task; this server is not on Windows.' }); return; }
+  execFile('schtasks', ['/query', '/tn', MAINT_TASK], { windowsHide: true, timeout: 10000 }, err => {
+    cb(err
+      ? { available: false, reason: 'The ' + MAINT_TASK + ' task is not registered yet.' }
+      : { available: true, reason: '' });
+  });
+}
+
+// Write the request, clear the last run's output, poke the scheduler. schtasks returns as
+// soon as it has handed the run over, so "started" here means asked-for, not finished —
+// which is what maintPending above is for.
+// Who is signed in, as far as this can be established.
+//   [...names]  — these sessions exist (an RDP session counts, and so does a
+//                 disconnected one: the user is still logged on, the task can
+//                 still land in their session)
+//   []          — nobody is signed in
+//   null        — could not tell, so do not act on it
+// The distinction matters: quser is absent on some Windows SKUs, and reading an
+// absent tool as "nobody is logged on" would block a setup that works today.
+function maintInteractiveUsers(cb) {
+  if (!IS_WIN) return cb(null);          // the scheduled-task model is Windows-only
+  execFile('quser', [], { windowsHide: true, timeout: 8000 }, (err, stdout) => {
+    const out = String(stdout || '').trim();
+    if (out) {
+      const users = out.split(/\r?\n/).slice(1)                  // drop the header row
+        .map(l => l.trim().replace(/^>/, '').split(/\s+/)[0])    // ">" marks the current session
+        .filter(Boolean);
+      return cb(users);
+    }
+    // No output: either "No User exists for *" on stderr (nobody home), or the
+    // tool is missing / failed, which is not an answer.
+    cb(err && (err.code === 'ENOENT' || err.killed) ? null : []);
+  });
+}
+
+// The task is registered LogonType Interactive, so Windows only launches it into
+// a session that already exists. With nobody signed in — the normal state for
+// this app, which runs as SYSTEM from boot — "schtasks /run" still reports
+// success and nothing whatsoever runs, leaving the panel waiting on a report
+// that is never coming. Ask first and refuse with a reason, rather than starting
+// something that can only hang.
+function maintStart(kind, params, cb) {
+  maintInteractiveUsers(users => {
+    if (Array.isArray(users) && !users.length) {
+      cb({ error: 'Nobody is signed in, and ' + MAINT_TASK + ' needs an interactive session to run. '
+                + 'Sign in at the console or connect over RDP, then try again.' });
+      return;
+    }
+    maintStartNow(kind, params, cb);
+  });
+}
+function maintStartNow(kind, params, cb) {
+  const id = String(Date.now());
+  try { fs.mkdirSync(maintDir(), { recursive: true }); } catch {}
+  try {
+    fs.writeFileSync(maintFile('maintenance-request.json'), JSON.stringify({ id, kind, params }, null, 2));
+  } catch (e) {
+    cb({ error: 'Could not write the request file: ' + e.message }); return;
+  }
+  for (const stale of ['maintenance-status.json', 'maintenance.log']) {
+    try { fs.unlinkSync(maintFile(stale)); } catch {}
+  }
+  if (kind === 'scan') { try { fs.unlinkSync(maintFile('maintenance-report.json')); } catch {} }
+  maintPending = { id, kind, at: Date.now() };
+  execFile('schtasks', ['/run', '/tn', MAINT_TASK], { windowsHide: true, timeout: 20000 }, (err, stdout, stderr) => {
+    if (err) {
+      maintPending = null;
+      cb({ error: 'Could not start ' + MAINT_TASK + ': ' + (String(stderr || '').trim() || err.message) });
+      return;
+    }
+    cb({ started: true, id });
+  });
+}
+
 // A dropped connection must never be fatal. This server proxies ComfyUI over both
 // HTTP and WebSocket, streams SSE to browsers, and serves range requests for large
 // video — all of which produce socket errors as normal traffic when a client
@@ -1915,12 +2239,51 @@ process.on('uncaughtException', err => {
   process.exit(1);
 });
 
+// ── Same-origin guard for state-changing requests ─────────────────────────
+// Every response carries Access-Control-Allow-Origin: *, so a page on any site
+// the user happens to have open can POST here — and nothing downstream asks who
+// called. That is enough to fire /api/maintenance/clean or /api/bulk-delete at
+// 127.0.0.1 with no click and no phishing. The firewall, Tailscale and the
+// client certificates all sit upstream of this: the request originates inside
+// the machine, from a browser that is already past every one of them.
+//
+// The comparison is Origin against the Host of the *same* request, not against
+// a list of approved hostnames. The app answers on the tailnet name, the
+// Tailscale IP, the LAN IP and localhost, over two ports — a list would be
+// wrong the first time a device or a port changed, while "the page was served
+// by whoever it is now talking to" is true for all of them at once.
+//
+// Origin, not Sec-Fetch-Site: Safari only sends Sec-Fetch-* from 16.4, and an
+// older iPhone would be locked out of its own app. Origin has ridden on every
+// cross-origin POST for well over a decade.
+const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+function sameOriginOk(req) {
+  if (!STATE_CHANGING.has(req.method)) return true;   // GETs stay open; they change nothing
+  const origin = req.headers.origin;
+  // No header at all is curl, the PowerShell tooling, or any non-browser client
+  // — and a browser cannot be made to omit it on a POST, so this is not a way in.
+  if (origin === undefined) return true;
+  // "null" is NOT the same as absent: that is what a sandboxed iframe sends, and
+  // folding the two together would hand the hole straight back.
+  if (!origin || origin === 'null') return false;
+  let host;
+  try { host = new URL(origin).host; } catch { return false; }
+  return !!host && host === req.headers.host;
+}
+
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, { 'Access-Control-Allow-Methods': 'GET, POST, DELETE', 'Access-Control-Allow-Headers': 'Content-Type' });
     res.end(); return;
+  }
+
+  if (!sameOriginOk(req)) {
+    console.log('[Blocked] cross-origin ' + req.method + ' ' + req.url + ' from ' + req.headers.origin);
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Cross-origin request refused' }));
+    return;
   }
 
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -2274,12 +2637,9 @@ runTests();
     // media/favorites tree) — used by the Files & Media search box, which spans
     // all three tabs. Plain browsing stays scoped to a single dir.
     const scopeAll = url.searchParams.get('scope') === 'all';
-    const normRoot = ROOT.replace(/\\/g, '/').toLowerCase();
-    const normComfy = COMFY_OUTPUT.replace(/\\/g, '/').toLowerCase();
     if (!scopeAll) {
-      // Prevent navigating outside allowed directories (normalize slashes for Windows)
-      const normDir = dir.replace(/\\/g, '/').toLowerCase();
-      if (!normDir.startsWith(normRoot) && !normDir.startsWith(normComfy)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+      // Prevent navigating outside allowed directories
+      if (!inMediaRoots(dir)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
     }
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
     const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') || '48', 10)));
@@ -2297,7 +2657,7 @@ runTests();
     const items = [];
     // scope=all seeds both roots (skipping ComfyUI output if it nests under ROOT).
     const scanQueue = scopeAll
-      ? (normComfy.startsWith(normRoot) ? [ROOT] : [ROOT, COMFY_OUTPUT])
+      ? (isInside(COMFY_OUTPUT, ROOT) ? [ROOT] : [ROOT, COMFY_OUTPUT])
       : [dir];
     let first = true;
     while (scanQueue.length) {
@@ -2468,10 +2828,8 @@ runTests();
         const { dir } = JSON.parse(body);
         if (!dir) { jsonRes(res, { error: 'Missing dir' }, 400); return; }
         const abs = path.resolve(dir);
-        const n = s => s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-        const na = n(abs), nr = n(ROOT), nc = n(COMFY_OUTPUT);
-        if (!na.startsWith(nr) && !na.startsWith(nc)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
-        if (na === nr || na === nc) { jsonRes(res, { error: 'Cannot delete a root folder' }, 400); return; }
+        if (!realInMediaRoots(abs)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+        if (isMediaRoot(abs)) { jsonRes(res, { error: 'Cannot delete a root folder' }, 400); return; }
         let st; try { st = fs.statSync(abs); } catch { jsonRes(res, { error: 'Folder not found' }, 404); return; }
         if (!st.isDirectory()) { jsonRes(res, { error: 'Not a folder' }, 400); return; }
         const ignorable = n => n.startsWith('.') || n === 'desktop.ini' || n === 'Thumbs.db';
@@ -2495,6 +2853,12 @@ runTests();
         const results = [];
         for (const p of paths) {
           try {
+            // The one destructive endpoint that never had a containment check:
+            // it recursively removes whatever it is handed. Same guard, same
+            // wording as /api/delete-folder.
+            const abs = path.resolve(p);
+            if (!realInMediaRoots(abs)) { results.push({ path: p, ok: false, error: 'Access denied' }); continue; }
+            if (isMediaRoot(abs)) { results.push({ path: p, ok: false, error: 'Cannot delete a root folder' }); continue; }
             const stat = await fs.promises.stat(p);
             if (stat.isDirectory()) {
               await fs.promises.rm(p, { recursive: true, force: true });
@@ -2528,24 +2892,20 @@ runTests();
       try {
         const { sources, target } = JSON.parse(body);
         if (!Array.isArray(sources) || !sources.length || !target) { jsonRes(res, { error: 'Missing sources/target' }, 400); return; }
-        const n = s => String(s).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-        const nr = n(ROOT), nc = n(COMFY_OUTPUT);
-        const inRoot = p => n(p).startsWith(nr) || n(p).startsWith(nc);
-        const isRoot = p => n(p) === nr || n(p) === nc;
 
         const tgt = path.resolve(target);
-        if (!inRoot(tgt)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+        if (!inMediaRoots(tgt)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
         let ts; try { ts = fs.statSync(tgt); } catch { jsonRes(res, { error: 'Target folder not found' }, 404); return; }
         if (!ts.isDirectory()) { jsonRes(res, { error: 'Target is not a folder' }, 400); return; }
 
         const srcs = [];
         for (const s of sources) {
           const abs = path.resolve(s);
-          if (n(abs) === n(tgt)) continue;                  // target may ride along in the selection
-          if (!inRoot(abs)) { jsonRes(res, { error: 'Access denied: ' + s }, 403); return; }
-          if (isRoot(abs)) { jsonRes(res, { error: 'Cannot merge a root folder' }, 400); return; }
+          if (normPath(abs) === normPath(tgt)) continue;    // target may ride along in the selection
+          if (!realInMediaRoots(abs)) { jsonRes(res, { error: 'Access denied: ' + s }, 403); return; }
+          if (isMediaRoot(abs)) { jsonRes(res, { error: 'Cannot merge a root folder' }, 400); return; }
           // Merging a folder into one of its own descendants would move the target into itself.
-          if (n(tgt).startsWith(n(abs) + '/')) { jsonRes(res, { error: 'Cannot merge a folder into its own subfolder' }, 400); return; }
+          if (isInside(tgt, abs)) { jsonRes(res, { error: 'Cannot merge a folder into its own subfolder' }, 400); return; }
           let st; try { st = fs.statSync(abs); } catch { jsonRes(res, { error: 'Folder not found: ' + s }, 404); return; }
           if (!st.isDirectory()) { jsonRes(res, { error: 'Not a folder: ' + s }, 400); return; }
           srcs.push(abs);
@@ -2611,14 +2971,10 @@ runTests();
         if (!Array.isArray(sources) || sources.length < 2) { jsonRes(res, { error: 'Pick at least 2 videos' }, 400); return; }
         if (sources.length > 50) { jsonRes(res, { error: 'Too many clips — 50 at most' }, 400); return; }
 
-        const n = s => String(s).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-        const nr = n(ROOT), nc = n(COMFY_OUTPUT);
-        const inRoot = p => n(p).startsWith(nr) || n(p).startsWith(nc);
-
         const srcs = [];
         for (const s of sources) {
           const abs = path.resolve(s);
-          if (!inRoot(abs)) { jsonRes(res, { error: 'Access denied: ' + s }, 403); return; }
+          if (!inMediaRoots(abs)) { jsonRes(res, { error: 'Access denied: ' + s }, 403); return; }
           if (!VIDEO_EXT.has(path.extname(abs).toLowerCase())) { jsonRes(res, { error: 'Not a video: ' + path.basename(abs) }, 400); return; }
           let st; try { st = fs.statSync(abs); } catch { jsonRes(res, { error: 'File not found: ' + path.basename(abs) }, 404); return; }
           if (!st.isFile()) { jsonRes(res, { error: 'Not a file: ' + path.basename(abs) }, 400); return; }
@@ -2737,10 +3093,8 @@ runTests();
         const { source } = JSON.parse(body);
         if (!source) { jsonRes(res, { error: 'No video given' }, 400); return; }
 
-        const n = s => String(s).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-        const nr = n(ROOT), nc = n(COMFY_OUTPUT);
         const abs = path.resolve(source);
-        if (!(n(abs).startsWith(nr) || n(abs).startsWith(nc))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+        if (!inMediaRoots(abs)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
         if (!VIDEO_EXT.has(path.extname(abs).toLowerCase())) { jsonRes(res, { error: 'Not a video: ' + path.basename(abs) }, 400); return; }
         let st; try { st = fs.statSync(abs); } catch { jsonRes(res, { error: 'File not found' }, 404); return; }
         if (!st.isFile()) { jsonRes(res, { error: 'Not a file' }, 400); return; }
@@ -2803,7 +3157,6 @@ runTests();
   // `dir` is omitted. Feeds the Move dialog's lazily-expanded destination tree.
   if (pn === '/api/dirs' && req.method === 'GET') {
     try {
-      const n = s => String(s).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
       const skip = name => name.startsWith('.') || name === 'desktop.ini' || name === 'Thumbs.db';
       // Drives the disclosure caret; a failed read just renders as a leaf.
       const hasSubdir = p => {
@@ -2814,12 +3167,12 @@ runTests();
       if (!raw || !raw.trim()) {
         const roots = [{ name: path.basename(ROOT) || ROOT, path: ROOT }];
         // Skip the ComfyUI output root when it already nests under the media root.
-        if (!n(COMFY_OUTPUT).startsWith(n(ROOT)) && fs.existsSync(COMFY_OUTPUT)) roots.push({ name: 'ComfyUI Output', path: COMFY_OUTPUT });
+        if (!isInside(COMFY_OUTPUT, ROOT) && fs.existsSync(COMFY_OUTPUT)) roots.push({ name: 'ComfyUI Output', path: COMFY_OUTPUT });
         jsonRes(res, { dirs: roots.map(r => ({ ...r, hasChildren: hasSubdir(r.path) })) });
         return;
       }
       const dir = path.resolve(decodeURIComponent(raw));
-      if (!n(dir).startsWith(n(ROOT)) && !n(dir).startsWith(n(COMFY_OUTPUT))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+      if (!inMediaRoots(dir)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
       let ents;
       try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { jsonRes(res, { error: e.message }, 404); return; }
       const dirs = ents.filter(d => d.isDirectory() && !skip(d.name))
@@ -2841,7 +3194,6 @@ runTests();
       try {
         const { parent, name } = JSON.parse(body);
         if (!parent || typeof name !== 'string') { jsonRes(res, { error: 'Missing parent/name' }, 400); return; }
-        const n = s => String(s).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
         const clean = name.trim();
         if (!clean) { jsonRes(res, { error: 'Folder name is required' }, 400); return; }
         if (clean.length > 64) { jsonRes(res, { error: 'Folder name is too long (64 characters max)' }, 400); return; }
@@ -2852,7 +3204,7 @@ runTests();
         if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(clean)) { jsonRes(res, { error: `"${clean}" is a reserved Windows name` }, 400); return; }
 
         const par = path.resolve(parent);
-        if (!n(par).startsWith(n(ROOT)) && !n(par).startsWith(n(COMFY_OUTPUT))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+        if (!inMediaRoots(par)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
         let ps; try { ps = fs.statSync(par); } catch { jsonRes(res, { error: 'Parent folder not found' }, 404); return; }
         if (!ps.isDirectory()) { jsonRes(res, { error: 'Parent is not a folder' }, 400); return; }
         // Explicit case-insensitive check: bare existsSync would let "Art" and
@@ -2878,13 +3230,10 @@ runTests();
       try {
         const { paths, target } = JSON.parse(body);
         if (!Array.isArray(paths) || !paths.length || !target) { jsonRes(res, { error: 'Missing paths/target' }, 400); return; }
-        const n = s => String(s).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-        const nr = n(ROOT), nc = n(COMFY_OUTPUT);
-        const inRoot = p => n(p).startsWith(nr) || n(p).startsWith(nc);
-        const isRoot = p => n(p) === nr || n(p) === nc;
+        const n = normPath;
 
         const tgt = path.resolve(target);
-        if (!inRoot(tgt)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+        if (!inMediaRoots(tgt)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
         let ts; try { ts = fs.statSync(tgt); } catch { jsonRes(res, { error: 'Target folder not found' }, 404); return; }
         if (!ts.isDirectory()) { jsonRes(res, { error: 'Target is not a folder' }, 400); return; }
 
@@ -2917,11 +3266,11 @@ runTests();
         for (const p of paths) {
           const abs = path.resolve(p);
           if (done.has(n(abs))) continue;
-          if (!inRoot(abs)) { errors.push({ path: p, error: 'Access denied' }); continue; }
-          if (isRoot(abs)) { errors.push({ path: p, error: 'Cannot move a root folder' }); continue; }
+          if (!realInMediaRoots(abs)) { errors.push({ path: p, error: 'Access denied' }); continue; }
+          if (isMediaRoot(abs)) { errors.push({ path: p, error: 'Cannot move a root folder' }); continue; }
           let st; try { st = fs.statSync(abs); } catch { errors.push({ path: p, error: 'Not found' }); continue; }
           if (n(path.dirname(abs)) === n(tgt)) { done.add(n(abs)); skipped++; continue; }   // already there
-          if (st.isDirectory() && (n(tgt) === n(abs) || n(tgt).startsWith(n(abs) + '/'))) {
+          if (st.isDirectory() && isInside(tgt, abs)) {
             errors.push({ path: p, error: 'Cannot move a folder into itself' }); continue;
           }
           const name = path.basename(abs), ext = path.extname(name);
@@ -3205,29 +3554,53 @@ runTests();
   }
 
   // API: Browse server folders (for the Settings path picker). Directory names
-  // only — no files. path="" lists the available drive roots.
+  // only — no files.
+  //
+  // path="" is the top of the tree, and the top is the one thing that is not
+  // the same shape everywhere: Windows has no single root, so it lists the
+  // drive letters, while everywhere else "/" *is* the root and gets listed
+  // like any other folder. Rows carry their own absolute path ("top" names
+  // whatever the top turned out to be) so the client renders a listing and
+  // never joins a path — it has no business knowing which separator this host
+  // uses, and when it guessed, it guessed a backslash.
   if (pn === '/api/browse-dirs' && req.method === 'GET') {
     const reqPath = (url.searchParams.get('path') || '').trim();
-    if (!reqPath) {
+    const TOP = IS_WIN ? 'Drives' : '/';
+    if (!reqPath && IS_WIN) {
       const drives = [];
       for (let c = 65; c <= 90; c++) {
         const d = String.fromCharCode(c) + ':\\';
-        try { if (fs.existsSync(d)) drives.push(d); } catch {}
+        if (fs.existsSync(d)) drives.push({ name: d, path: d });
       }
-      jsonRes(res, { path: '', parent: null, dirs: drives });
+      jsonRes(res, { path: '', parent: null, top: TOP, dirs: drives });
       return;
     }
-    const p = path.resolve(reqPath);
-    let entries = [];
-    try {
-      entries = fs.readdirSync(p, { withFileTypes: true })
-        .filter(e => { try { return e.isDirectory(); } catch { return false; } })
-        .map(e => e.name)
-        .filter(n => !n.startsWith('$') && n !== 'System Volume Information')
-        .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-    } catch (e) { jsonRes(res, { error: e.message }, 400); return; }
-    const parentDir = path.dirname(p);
-    jsonRes(res, { path: p, parent: parentDir === p ? '' : parentDir, dirs: entries });
+    // Async and capped, because this walks wherever it is pointed. A sync read
+    // of a directory like WinSxS (100k+ entries) stalls the one event loop that
+    // is also carrying every in-flight generation, and the picker would then be
+    // handed all of them to render. The cap is reported rather than silent: a
+    // listing that was cut says so instead of looking complete.
+    (async () => {
+      const p = path.resolve(reqPath || '/');
+      let names = [];
+      try {
+        names = (await fs.promises.readdir(p, { withFileTypes: true }))
+          .filter(e => { try { return e.isDirectory(); } catch { return false; } })
+          .map(e => e.name)
+          .filter(n => !n.startsWith('$') && n !== 'System Volume Information')
+          .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+      } catch (e) { jsonRes(res, { error: e.message }, 400); return; }
+      const shown = names.slice(0, BROWSE_DIR_CAP);
+      // Nowhere to go up to from the top: on Windows that is the drive list (""),
+      // off Windows "/" is already the top, so ↑ stays disabled (null).
+      const parentDir = path.dirname(p);
+      const parent = parentDir === p ? (IS_WIN ? '' : null) : parentDir;
+      jsonRes(res, {
+        path: p, parent, top: TOP,
+        dirs: shown.map(name => ({ name, path: path.join(p, name) })),
+        truncated: names.length - shown.length,
+      });
+    })();
     return;
   }
 
@@ -3372,33 +3745,160 @@ runTests();
     return;
   }
 
+  // API: Restart this server. The process cannot restart itself, so it hands the job to
+  // restart-helper.js -- spawned detached, so it outlives the exit below -- then answers
+  // and stops. See that file for why the *how* is config (restartCmd) rather than a guess.
+  //
+  // Reachable only same-origin (sameOriginOk, above) and, when the gate is on, only with
+  // a session: this is a POST that takes the server down, so it needs both.
+  //
+  // Generations are not affected. They run inside ComfyUI, which is a separate process --
+  // the queue keeps going, and the jobs store lives in the browser, so the run list
+  // reconciles when the socket comes back.
+  if (pn === '/api/restart' && req.method === 'POST') {
+    let responded = false;
+    const done = (obj, code) => { if (!responded) { responded = true; jsonRes(res, obj, code || 200); } };
+    let spawnErr = null;
+    let helper = null;
+    try {
+      helper = spawn(process.execPath, [path.join(__dirname, 'restart-helper.js')], {
+        detached: true, stdio: 'ignore', windowsHide: true, cwd: __dirname,
+      });
+      helper.on('error', e => { spawnErr = e; });
+      helper.unref();
+    } catch (e) { spawnErr = e; }
+    // A failed exec is an async event, not a throw, so give it a beat to arrive before
+    // committing to the exit. Answering "restarting" and then not restarting would leave
+    // the page waiting for a server that is never coming back.
+    setTimeout(() => {
+      if (spawnErr || !helper) {
+        done({ error: 'Could not start the restart helper: ' + (spawnErr ? spawnErr.message : 'spawn returned nothing') }, 500);
+        return;
+      }
+      done({ restarting: true, port: PORT, via: config.restartCmd ? 'restartCmd' : 'node server.js' });
+      // Long enough for the response to flush; the helper is already waiting for the port.
+      setTimeout(() => {
+        console.log('[Restart] handing off to restart-helper.js and exiting');
+        try { server.close(); } catch {}
+        process.exit(0);
+      }, 350);
+    }, 350);
+    return;
+  }
+
   // API: Start the local ComfyUI install. Uses config.comfyStartCmd (shell string
-  // or [cmd, ...args] array); falls back to the ComfyUI-Easy-Install launcher bat
-  // next to comfyDir. Probes first so a running instance is never double-started.
+  // or [cmd, ...args] array); falls back to whichever launcher this platform
+  // ships. Probes first so a running instance is never double-started.
   if (pn === '/api/comfy/start' && req.method === 'POST') {
     let responded = false;
     const done = (obj, code) => { if (!responded) { responded = true; jsonRes(res, obj, code || 200); } };
+    let launched = false;
     const launch = () => {
+      // The probe's error handler stays attached after a successful reply, so a
+      // socket error arriving late would otherwise start a second ComfyUI while
+      // the first is running — invisibly, since \`done\` would swallow the reply.
+      if (launched) return;
+      launched = true;
       let cmd = config.comfyStartCmd;
+      // A launcher script is what the bundled distributions ship and it differs
+      // per platform, so the fallback is a list rather than one name. Every
+      // bundled layout puts the launcher *beside* comfyDir, not inside it:
+      // ComfyUI_windows_portable holds run_nvidia_gpu.bat next to the ComfyUI/
+      // folder that comfyDir points at. A plain source checkout ships no
+      // launcher at all, which is the common case off Windows — there the entry
+      // point is main.py, run from comfyDir with a real interpreter.
+      let cwd = null, why = '';
       if (!cmd) {
-        const guess = path.join(path.dirname(COMFY_DIR), 'Start ComfyUI.bat');
-        if (fs.existsSync(guess)) cmd = guess;
+        const parent = path.dirname(COMFY_DIR);
+        const guesses = IS_WIN
+          ? [path.join(parent, 'Start ComfyUI.bat'), path.join(parent, 'run_nvidia_gpu.bat'), path.join(parent, 'run_cpu.bat')]
+          : [path.join(parent, 'start-comfyui.sh'), path.join(COMFY_DIR, 'start.sh'), path.join(COMFY_DIR, 'run.sh')];
+        for (const g of guesses) { if (fs.existsSync(g)) { cmd = g; break; } }
+        if (!cmd && fs.existsSync(path.join(COMFY_DIR, 'main.py'))) {
+          const py = findPython();
+          if (py) { cmd = [py, path.join(COMFY_DIR, 'main.py')]; cwd = COMFY_DIR; }  // ComfyUI resolves models/ and custom_nodes/ relative to itself
+          else why = ' Found main.py but no Python interpreter: looked for a venv beside it and then along PATH.';
+        }
       }
       if (!cmd || (Array.isArray(cmd) && !cmd.length)) {
-        done({ error: 'No comfyStartCmd configured and no "Start ComfyUI.bat" found next to comfyDir — set comfyStartCmd in config.json.' }, 400);
+        done({ error: 'No comfyStartCmd configured, and no launcher script or main.py found in or next to comfyDir — set comfyStartCmd in config.json.' + why }, 400);
         return;
       }
       try {
         const proc = Array.isArray(cmd)
-          ? spawn(cmd[0], cmd.slice(1), { detached: true, stdio: 'ignore', windowsHide: true, cwd: path.dirname(cmd[0]) })
-          : spawn('"' + cmd + '"', { shell: true, detached: true, stdio: 'ignore', windowsHide: true, cwd: path.dirname(cmd) });
+          ? spawn(cmd[0], cmd.slice(1), { detached: true, stdio: 'ignore', windowsHide: true, cwd: cwd || path.dirname(cmd[0]) })
+          : spawn('"' + cmd + '"', { shell: true, detached: true, stdio: 'ignore', windowsHide: true, cwd: cwd || path.dirname(cmd) });
+        // A failed exec arrives as an async 'error' event, NOT as a throw, so the
+        // catch below cannot see it. Unhandled it becomes an uncaught exception,
+        // and this process exits on those — one press of "start it now" would
+        // take the server and every in-flight run down with it.
+        //
+        // Reporting it is the second half: replying the instant spawn returns
+        // means the answer is always started:true, and the failure lands after
+        // it. So hold the success back long enough for an immediate exec failure
+        // to win the race. A launch that gets past exec takes 30-90s to be
+        // usable anyway, so 400ms costs the caller nothing.
+        let okTimer = null;
+        proc.on('error', e => { clearTimeout(okTimer); done({ error: 'Launch failed: ' + e.message }, 500); });
+        okTimer = setTimeout(() => done({ started: true, message: 'ComfyUI starting — model load can take 30-90s.' }), 400);
         proc.unref();
-        done({ started: true, message: 'ComfyUI starting — model load can take 30-90s.' });
       } catch (e) { done({ error: 'Launch failed: ' + e.message }, 500); }
     };
     const probe = http.get(COMFY_URL + '/system_stats', { timeout: 2500 }, (r) => { r.resume(); done({ running: true }); });
     probe.on('timeout', () => { probe.destroy(); launch(); });
     probe.on('error', launch);
+    return;
+  }
+
+  // API: Clean — the option list, the remembered ticks, and whatever the last run said.
+  // Polled every couple of seconds while a run is going, so it stays cheap: three small
+  // files off disk and one schtasks query.
+  if (pn === '/api/maintenance/state' && req.method === 'GET') {
+    maintTaskInfo(t => {
+      jsonRes(res, {
+        available: t.available,
+        reason: t.reason,
+        task: MAINT_TASK,
+        setupScript: 'scripts\\register_maintenance_task.ps1',
+        options: MAINT_OPTIONS,
+        selection: maintSelection(),
+        job: maintJob(),
+        log: maintLog(),
+        report: maintReadJson('maintenance-report.json'),
+      });
+    });
+    return;
+  }
+
+  // API: Clean — measure everything (deletes nothing), or run the selection. Both go
+  // through the same task, and the wrapper decides the mode from the kind, so a scan
+  // cannot be talked into deleting by anything sent from here.
+  if ((pn === '/api/maintenance/scan' || pn === '/api/maintenance/clean') && req.method === 'POST') {
+    const kind = pn.endsWith('/scan') ? 'scan' : 'clean';
+    let bodyStr = '';
+    req.on('data', c => bodyStr += c);
+    req.on('end', () => {
+      let body = {};
+      if (bodyStr) { try { body = JSON.parse(bodyStr); } catch { jsonRes(res, { error: 'Bad JSON' }, 400); return; } }
+      const running = maintJob();
+      if (running && (running.state === 'running' || (running.state === 'starting' && !running.stalled))) {
+        jsonRes(res, { error: 'A clean is already running — wait for it to finish.' }, 409); return;
+      }
+      if (kind === 'scan') {
+        maintStart('scan', {}, r => jsonRes(res, r, r.error ? 500 : 200));
+        return;
+      }
+      // A run deletes permanently and there is no undo, so it takes an explicit
+      // confirmation as well as a selection — never just a POST that arrived.
+      if (body.confirm !== true) { jsonRes(res, { error: 'Missing confirmation' }, 400); return; }
+      const sel = {};
+      for (const o of MAINT_OPTIONS) sel[o.key] = !!(body.selection && body.selection[o.key]);
+      if (!maintPicked(sel)) { jsonRes(res, { error: 'Nothing is ticked — there would be nothing to clean.' }, 400); return; }
+      // Remembered on Run, not through some separate Save: the ticks that ran are the
+      // ones worth coming back to.
+      try { maintSaveSelection(sel); } catch (e) { jsonRes(res, { error: 'Could not save the selection: ' + e.message }, 500); return; }
+      maintStart('clean', maintParams(sel), r => jsonRes(res, r, r.error ? 500 : 200));
+    });
     return;
   }
 
@@ -3549,7 +4049,7 @@ runTests();
     const { file: wfName, shortcut } = resolveWfName(rawName);
     if (!wfName) { jsonRes(res, { error: 'No such shortcut' }, 404); return; }
     const wfPath = path.join(WORKFLOWS_DIR, wfName);
-    if (!path.resolve(wfPath).startsWith(path.resolve(WORKFLOWS_DIR))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+    if (!isInside(wfPath, WORKFLOWS_DIR)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
     fs.readFile(wfPath, 'utf8', async (err, raw) => {
       if (err) { jsonRes(res, { error: err.message }, 500); return; }
       let wf; try { wf = JSON.parse(raw.replace(/^﻿/, '')); } catch (e) { jsonRes(res, { error: 'Parse error: ' + e.message }, 500); return; }
@@ -3625,7 +4125,7 @@ runTests();
         jsonRes(res, { error: 'Pick a workflow stored in ComfyUI first' }, 400); return;
       }
       const wfPath = path.join(WORKFLOWS_DIR, rawName);
-      if (!path.resolve(wfPath).startsWith(path.resolve(WORKFLOWS_DIR))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+      if (!isInside(wfPath, WORKFLOWS_DIR)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
       if (!fs.existsSync(wfPath)) { jsonRes(res, { error: 'No such workflow' }, 404); return; }
       const values = (body.fieldValues && typeof body.fieldValues === 'object') ? body.fieldValues : null;
       if (!values) { jsonRes(res, { error: 'Missing fieldValues' }, 400); return; }
@@ -3662,7 +4162,7 @@ runTests();
       let name = String(body.name || 'DEBUG.json').replace(/[\\\/:*?"<>|]/g, '_').trim();
       if (!name.toLowerCase().endsWith('.json')) name += '.json';
       const wfPath = path.join(WORKFLOWS_DIR, name);
-      if (!path.resolve(wfPath).startsWith(path.resolve(WORKFLOWS_DIR))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+      if (!isInside(wfPath, WORKFLOWS_DIR)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
       // Never clobber an existing workflow unless the caller explicitly asks to.
       // The Remix dialog never asks; a re-save does, because re-saving
       // the same DEBUG file is exactly how that loop works.
@@ -3699,12 +4199,12 @@ runTests();
       const isVid = ['.mp4', '.webm', '.mkv', '.mov'].includes(fileExt);
       if (!isPng && !isVid) { jsonRes(res, { error: 'Only PNG and video files can carry an embedded workflow' }, 400); return; }
       const abs = path.resolve(filePath);
-      if (!abs.startsWith(path.resolve(ROOT)) && !abs.startsWith(path.resolve(COMFY_OUTPUT))) {
+      if (!inMediaRoots(abs)) {
         jsonRes(res, { error: 'File must be under the media or ComfyUI output folder' }, 403); return;
       }
       if (!fs.existsSync(abs)) { jsonRes(res, { error: 'File not found' }, 404); return; }
       const wfPath = path.join(WORKFLOWS_DIR, workflowName);
-      if (!path.resolve(wfPath).startsWith(path.resolve(WORKFLOWS_DIR))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+      if (!isInside(wfPath, WORKFLOWS_DIR)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
       let wf;
       try { wf = JSON.parse(fs.readFileSync(wfPath, 'utf8')); } catch (e) { jsonRes(res, { error: 'Workflow read failed: ' + e.message }, 500); return; }
       let apiPrompt;
@@ -3737,7 +4237,7 @@ runTests();
         wf = overrides.workflow; effName = '__embedded__';
       } else if (wfName) {
         const wfPath = path.join(COMFY_DIR, 'user', 'default', 'workflows', wfName);
-        if (!path.resolve(wfPath).startsWith(path.resolve(path.join(COMFY_DIR, 'user', 'default', 'workflows')))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
+        if (!isInside(wfPath, path.join(COMFY_DIR, 'user', 'default', 'workflows'))) { jsonRes(res, { error: 'Access denied' }, 403); return; }
         let raw; try { raw = fs.readFileSync(wfPath, 'utf8'); } catch (e) { jsonRes(res, { error: e.message }, 500); return; }
         try { wf = JSON.parse(raw); } catch (e) { jsonRes(res, { error: 'Parse error: ' + e.message }, 500); return; }
         const st = fs.statSync(wfPath, { throwIfNoEntry: false }); mtime = st ? st.mtimeMs : 0;

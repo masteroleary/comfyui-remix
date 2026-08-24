@@ -1,7 +1,13 @@
 // ── Folder picker ──────────────────────────────────────────────────────────
 // Browses the server's filesystem one directory at a time (/api/browse-dirs),
-// which is how the Settings path fields get filled in without anyone typing a
-// Windows path by hand. Directory names only — the endpoint never lists files.
+// which is how the Settings path fields get filled in without anyone typing an
+// absolute path by hand. Directory names only — the endpoint never lists files.
+//
+// Every row arrives with its own absolute path, so nothing here ever joins one.
+// It used to, with a hardcoded backslash, which made the whole sheet a Windows
+// component: the separator was wrong off Windows and the top of the tree was a
+// drive list that came back empty there. Where the tree starts is the server's
+// answer too — it sends "top" as the label for it.
 //
 // Before the rewrite this was plain DOM: one element grabbed per row and its
 // textContent rewritten on every step. It is a component now, so the listing is
@@ -22,7 +28,9 @@ export default {
   emits: ['close', 'select'],
   setup(props, { emit }) {
     const s = reactive({
-      cur: '',          // the folder being shown; '' is the drive list
+      cur: '',          // the folder being shown; '' is the top of the tree
+      top: '',          // what the top is called here: 'Drives', or '/'
+      truncated: 0,     // how many rows the server left out, if it capped the listing
       parent: null,     // null at the top, which is what disables ↑
       dirs: [],
       loading: false,
@@ -33,11 +41,13 @@ export default {
       try {
         const d = await api.browseDirs(p || '');
         s.cur = d.path || '';
+        s.top = d.top || s.top;
         s.parent = d.parent === undefined ? null : d.parent;
         s.dirs = d.dirs || [];
+        s.truncated = d.truncated || 0;
       } catch (e) {
         // An unreadable path (moved, unplugged, permission) falls back to the
-        // drive list rather than leaving the sheet stuck on an error.
+        // top of the tree rather than leaving the sheet stuck on an error.
         if (p) { s.loading = false; load(''); return; }
         showToast('Cannot open: ' + e.message);
         s.dirs = [];
@@ -49,13 +59,10 @@ export default {
     // hand since the last browse.
     watch(() => props.open, isOpen => { if (isOpen) load((props.path || '').trim()); }, { immediate: true });
 
-    // The server speaks Windows paths, so rows join with a backslash. Joining on
-    // the drive list would produce "\C:\" — there the name *is* the path.
-    const enter = name => load(s.cur ? s.cur.replace(/[\\/]+$/, '') + '\\' + name : name);
     const up = () => { if (s.parent !== null) load(s.parent); };
     const choose = () => { if (s.cur) emit('select', s.cur); emit('close'); };
 
-    return { s, enter, up, choose, close: () => emit('close') };
+    return { s, load, up, choose, close: () => emit('close') };
   },
   template: `
     <div v-if="open" class="confirm-overlay open center above" @click.self="close">
@@ -66,12 +73,15 @@ export default {
         </div>
         <div class="dir-nav">
           <button class="set-clr dir-up" title="Up one level" :disabled="s.parent === null" @click="up">↑</button>
-          <div class="dir-current">{{ s.cur || 'Drives' }}</div>
+          <div class="dir-current">{{ s.cur || s.top || '…' }}</div>
         </div>
         <div class="dir-list">
           <div v-if="s.loading" class="loading"><div class="spinner"></div> Loading…</div>
           <div v-else-if="!s.dirs.length" class="dir-empty">No subfolders</div>
-          <div v-else v-for="name in s.dirs" :key="name" class="dir-row" @click="enter(name)">📁 {{ name }}</div>
+          <div v-else v-for="d in s.dirs" :key="d.path" class="dir-row" @click="load(d.path)">📁 {{ d.name }}</div>
+          <!-- A capped listing says so. Silence here would read as "that is all
+               of them", and the folder you wanted would simply not be on screen. -->
+          <div v-if="s.truncated" class="dir-empty">…and {{ s.truncated }} more — type the path into the field instead</div>
         </div>
         <div class="confirm-btns dir-foot">
           <button class="btn-cancel" @click="close">Cancel</button>

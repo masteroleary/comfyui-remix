@@ -1,0 +1,7 @@
+# These scripts write their transcripts next to themselves, which is now inside the
+# repo. The runs are machine-specific output, not source.
+register_maintenance_result.txt
+retrim_result.txt
+wipe_result.txt
+wipe_report_log.txt
+wipe_report.json

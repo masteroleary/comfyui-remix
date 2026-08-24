@@ -4,8 +4,13 @@
 Media/**
 !Media/Anima_Demo.png
 
-# Config with API keys
+# Config with API keys. The backup glob matters: "config.json" is an exact match, so
+# a copy named anything else sat in the repo untracked-but-committable, hash and all.
 config.json
+config.backup*
+config.*.bak
+restart.log
+*.bak
 claude-conversations.json
 
 # OS files

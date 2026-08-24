@@ -292,6 +292,10 @@ html.auth-on .shell-settings{right:56px}
   display:grid;gap:12px;max-width:720px;margin:0 auto;
   grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
 }
+/* One per row on a phone. auto-fit alone fits two once the viewport passes ~440px, which
+   a large handset clears -- and a pair of half-width tiles is harder to hit accurately
+   than one full-width one, so the breakpoint decides it rather than the arithmetic. */
+@media (max-width:640px){ .home-tiles{grid-template-columns:1fr} }
 /* Icon on the left, label over sub on the right. Grid rather than nested flex
    so the three spans stay flat siblings in the template: the icon claims one
    column across both rows, the text stacks in the other. */
