@@ -177,7 +177,10 @@ select.rmx-inp{cursor:pointer}
 .rmx-fab{position:fixed;right:20px;bottom:20px;z-index:2900;background:#0a84ff;color:#fff;border:none;border-radius:24px;padding:12px 18px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 8px 24px #0a84ff55}
 .rmx-tabs{display:flex;gap:2px;background:#0a0a0a;border:1px solid #2c2c2e;border-radius:8px;padding:2px}
 .rmx-tabs button{background:none;border:none;color:#8e8e93;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px}
-.rmx-tabs button.on{background:#2c2c2e;color:#f2f2f7}
+/* Chosen, and unmistakably so. It was the same grey as every other raised
+   surface in the app, which left the switch stating its choice in the one colour
+   that means "a panel is here". */
+.rmx-tabs button.on{background:var(--switch-on);color:#fff}
 .rmx-btn2{background:#2c2c2e;border:1px solid #48484a;border-radius:8px;color:#f2f2f7;cursor:pointer;padding:6px 12px;font-size:12px}
 .rmx-btn2:disabled{opacity:.45;cursor:not-allowed}
 .rmx-inp.taken{border-color:#e06c6c}
@@ -211,12 +214,17 @@ select.rmx-inp{cursor:pointer}
 /* Live rules are worth noticing from the collapsed summary: the run will not
    send what is on screen, and this is the only thing that says so. */
 .rmx-repl>summary .rmx-repl-on{color:#ff9f0a;font-weight:700}
+/* And how many prompts they multiply out to, which used to be a red block on
+   the Run tab. Warmer than the count beside it because it is the expensive half
+   — twelve jobs is a decision — but not the red of a warning: it is what the
+   rules were set up to do. */
+.rmx-repl>summary .rmx-repl-jobs{color:#ff8f8f;font-weight:700}
 .rmx-repl-body{padding:2px 12px 12px}
 .rmx-repl-all{display:flex;align-items:center;gap:6px;font-size:12px;color:#8e8e93;margin-bottom:8px;cursor:pointer;user-select:none}
 .rmx-repl-all input,.rmx-repl-row input[type=checkbox]{width:16px;height:16px;accent-color:#0a84ff}
 .rmx-repl-row{
   display:grid;
-  grid-template-columns:8px auto minmax(0,1fr) auto minmax(0,1fr) 0 auto;
+  grid-template-columns:8px auto minmax(0,1fr) auto minmax(0,1.3fr) auto;
   align-items:center;gap:6px;margin-bottom:6px;
 }
 .rmx-repl-row>*{min-width:0}
@@ -228,24 +236,52 @@ select.rmx-inp{cursor:pointer}
    palette, so switching one back on does not renumber the colours of the rest. */
 .rmx-repl-dot{width:8px;height:8px;border-radius:50%;display:block}
 .rmx-repl-dot.off{opacity:.22}
-/* "2/3" — one of several rules that find the same thing, which a run turns into
-   a job each — and the button that adds the next one, since the cell that says
-   what the group is is the one place with the group already in hand. The track
-   only opens once some row has something to find; a row with nothing typed in it
-   keeps the empty cell (there is nothing there to vary) so the columns still
-   agree with each other. */
-.rmx-repl-list:has(.rmx-varn) .rmx-repl-row{
-  grid-template-columns:8px auto minmax(0,1fr) auto minmax(0,1fr) 36px auto;
+/* ── A keyword's answers ──────────────────────────────────────────────────
+   The cell that used to be a dropdown holding one prompt. A keyword takes as
+   many as you like — each one is a job — so it states what is picked and opens
+   a list of tick boxes. */
+.rmx-repl-vals{position:relative;display:block;min-width:0}
+.rmx-valbtn{
+  display:flex;align-items:center;gap:6px;width:100%;text-align:left;cursor:pointer;
+  font:inherit;font-size:12.5px;
 }
-.rmx-varn{
-  font:inherit;font-size:10px;line-height:1;padding:4px;border-radius:999px;text-align:center;
-  background:#3a2a12;color:#ffb340;border:1px solid #5a4020;white-space:nowrap;cursor:pointer;
+.rmx-valbtn:hover{border-color:#0a84ff}
+.rmx-valbtn-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rmx-valbtn.empty .rmx-valbtn-t{color:#8e8e93}
+/* How many, when the names have run out of room to say so themselves. */
+.rmx-valbtn-n{
+  flex:none;font-size:10px;line-height:1;padding:3px 6px;border-radius:999px;
+  background:#3a2a12;color:#ffb340;border:1px solid #5a4020;
 }
-.rmx-varn:hover{background:#4a3516;border-color:#ffb340}
-/* No group yet: the same cell and the same click, dressed down — nothing is
-   varying here, so nothing should look as though it is. */
-.rmx-varn-add{background:#2a2a2c;color:#8e8e93;border-color:#3a3a3c;font-size:12px;padding:3px 4px}
-.rmx-varn-add:hover{background:#3a2a12;color:#ffb340;border-color:#5a4020}
+.rmx-valbtn-c{flex:none;color:#8e8e93;font-size:10px}
+/* Catches the click that closes the menu. Fixed and transparent: the menu holds
+   real checkboxes, so it cannot close on the button losing focus — reaching a
+   checkbox is what taking focus off the button is for. */
+.rmx-valback{position:fixed;inset:0;z-index:19}
+.rmx-valmenu{
+  position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;min-width:260px;
+  background:#1c1c1e;border:1px solid #48484a;border-radius:10px;
+  box-shadow:0 10px 30px #000a;max-height:300px;overflow:auto;padding:0 4px 4px;
+}
+.rmx-valmenu-h{
+  position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;
+  background:#1c1c1e;margin:0 -4px;padding:8px 10px 6px;
+  font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#7d7d82;
+  border-bottom:1px solid #2c2c2e;
+}
+.rmx-valmenu-h span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rmx-valmenu-x{flex:none;background:none;border:0;color:#8e8e93;cursor:pointer;font-size:12px;padding:0 2px}
+.rmx-valmenu-x:hover{color:#f2f2f7}
+.rmx-val{
+  display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;
+  color:#f2f2f7;font-size:12.5px;cursor:pointer;
+}
+.rmx-val:hover{background:#0a84ff26}
+.rmx-val input[type=checkbox]{width:14px;height:14px;margin:0;flex:none;accent-color:#0a84ff;cursor:pointer}
+.rmx-val-n{flex:none;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The prompt itself, quiet and one line: it is what tells two similarly named
+   entries apart, and it is not what you are picking. */
+.rmx-val-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7d7d82;font-size:11.5px}
 .rmx-repl-swap{padding:6px 9px;color:#0a84ff}
 .rmx-repl-del{width:30px;padding:6px 0;background:#3a1e1e;color:#e06c6c;border:1px solid #5a2a2a;border-radius:8px;cursor:pointer;font-size:12px}
 .rmx-repl-del:hover{border-color:#e06c6c}
@@ -275,6 +311,9 @@ select.rmx-inp{cursor:pointer}
   margin-left:auto;flex:none;font-size:10px;line-height:1;padding:3px 6px;border-radius:999px;
   background:#2d2416;color:#e0b86c;border:1px solid #4a3a1e;white-space:nowrap;
 }
+/* Which rule pulls this keyword in. Quiet — the token is what is being picked,
+   this is only why it is on the list. */
+.rmx-kw-via{flex:none;font-size:11px;color:#7d7d82;font-family:ui-monospace,monospace}
 .rmx-nodegroup{margin:2px 0 10px}
 /* Family pills above the first lora section. Same language as the .rmx-tabs
    switch — quiet until on — but they wrap: there are several, and a phone is
@@ -302,7 +341,7 @@ select.rmx-inp{cursor:pointer}
 .mb-toolbar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #2c2c2e;flex:none;flex-wrap:wrap}
 .mb-roots{display:flex;gap:2px;background:#0a0a0a;border:1px solid #2c2c2e;border-radius:8px;padding:2px;flex:none}
 .mb-roots button{background:none;border:none;color:#8e8e93;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;border-radius:6px}
-.mb-roots button.on{background:#2c2c2e;color:#f2f2f7}
+.mb-roots button.on{background:var(--switch-on);color:#fff}
 .mb-roots button:disabled{opacity:.4;cursor:default}
 .mb-search{flex:1;min-width:80px}
 .mb-grid{display:flex;flex-wrap:wrap;gap:6px;padding:12px;overflow:auto;align-content:flex-start;flex:1;min-height:0}
@@ -311,14 +350,6 @@ select.rmx-inp{cursor:pointer}
 .mb-cell.sel{border-color:#0a84ff;box-shadow:0 0 0 2px #0a84ff inset}
 .mb-tick{position:absolute;top:5px;left:5px;width:19px;height:19px;accent-color:#0a84ff;cursor:pointer;z-index:3;margin:0}
 .mb-selbar{display:flex;align-items:center;gap:10px;padding:9px 12px;border-top:1px solid #2c2c2e;font-size:12.5px;flex:none}
-/* Loud on purpose: several enabled rules for one keyword multiply the queue,
-   and finding that out at run 48 is the failure this is here to prevent. */
-.rmx-varwarn{
-  margin:0 0 10px;padding:9px 11px;border-radius:8px;
-  border:1px solid #ff453a66;background:#ff453a1a;color:#ff8f8f;
-  font-size:12.5px;line-height:1.5;
-}
-.rmx-varwarn b{color:#ffc0c0}
 /* The same fact the other way round: rules that are set and are not going to
    fire, because this prompt does not contain their keyword. Muted, not red —
    it is the absence of a multiplication, so nothing is about to cost anything.
@@ -364,14 +395,54 @@ select.rmx-inp{cursor:pointer}
 
 /* The preview: what the run will actually send, once the rules have run and any
    unclaimed [keyword] is gone. Monospace-ish and selectable, because the point
-   is to read it word for word. */
+   is to read it word for word — and it grows to hold all of it. It had an inner
+   scroller, which is the one thing a block of text being read word for word
+   should not have: the panel scrolls already, and a second scroller inside it
+   hides the end of the sentence being checked. */
 .rmx-repl-final{margin-top:12px;padding-top:10px;border-top:1px solid #2c2c2e}
+/* Whatever leads the column starts flush with it — there is no heading above
+   the tabs to carry the gap any more. */
+.rmx-repl-final > :first-child{margin-top:0}
 .rmx-repl-final-text{
   margin-top:5px;padding:9px 10px;border-radius:8px;
   background:#0a0a0a;border:1px solid #2c2c2e;color:#c7c7cc;
   font-size:12.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word;
-  max-height:220px;overflow:auto;user-select:text;
+  user-select:text;
 }
+/* One tab per prompt the rules multiply out to — a run queues a job for each,
+   and until they were tabs only the first of them could be read. One per line:
+   the label is the list of titles that combination picked, and eleven of those
+   do not fit beside eleven more. Three keywords with three answers each is 27
+   lines, so the stack scrolls rather than pushing the paragraph off screen. */
+.rmx-repl-tabs{
+  display:flex;flex-direction:column;gap:4px;margin-top:6px;
+  max-height:min(34vh,300px);overflow:auto;
+}
+/* Two controls in one row: the box says whether this prompt runs, the titles say
+   which one is being previewed. */
+.rmx-repl-tab{
+  display:flex;align-items:baseline;gap:7px;
+  background:#1c1c1e;border:1px solid #2c2c2e;border-radius:8px;padding:4px 9px 5px 8px;
+}
+.rmx-repl-tab input[type=checkbox]{width:13px;height:13px;margin:0;flex:none;accent-color:#0a84ff;cursor:pointer;position:relative;top:2px}
+.rmx-repl-tab input[type=checkbox]:disabled{cursor:default}
+/* The titles wrap rather than ellipsing: the whole point of the line is reading
+   what this prompt is, and half of it under a … is not that. */
+.rmx-repl-tab-l{
+  display:flex;flex-wrap:wrap;gap:0 .45em;flex:1;min-width:0;
+  background:none;border:0;padding:0;color:#8e8e93;text-align:left;
+  font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;line-height:1.45;
+}
+.rmx-repl-tab:hover{border-color:#0a84ff}
+.rmx-repl-tab:hover .rmx-repl-tab-l{color:#c7c7cc}
+/* Selected. Outlined rather than filled — a solid blue pill puts a blue
+   checkbox on a blue ground, and the box is the half that has to stay readable. */
+.rmx-repl-tab.on{background:#0a2540;border-color:#0a84ff}
+.rmx-repl-tab.on .rmx-repl-tab-l{color:#eaf3ff}
+/* Unticked: still selectable and still legible, because you have to be able to
+   read what you are leaving out — just plainly not going to run. */
+.rmx-repl-tab.skip{opacity:.5}
+.rmx-repl-tab.skip .rmx-repl-tab-l{text-decoration:line-through}
 /* ── The panel in two columns ──────────────────────────────────────────────
    One column by default, two where there is room for two usable ones: a rule
    row carries two text inputs, a swap and a delete, and squeezed into half a
@@ -401,5 +472,4 @@ select.rmx-inp{cursor:pointer}
      the window — underneath .shell-settings and the logout button, which are
      position:fixed at z-index 400 in that same corner. */
   .rmx-form .rmx-repl-cols:has(.rmx-repl-final) > .rmx-repl-final{position:sticky;top:0}
-  .rmx-repl-cols:has(.rmx-repl-final) .rmx-repl-final-text{max-height:min(46vh,420px)}
 }

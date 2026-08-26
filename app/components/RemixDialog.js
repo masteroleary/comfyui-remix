@@ -23,7 +23,7 @@ import MediaTile from './MediaTile.js';
 import WorkflowFields, { ctype, shortLora, canonLora, loraWords, replaceableText } from './WorkflowFields.js';
 import ReplacementRules from './ReplacementRules.js';
 import { activeReplacements, applyReplacements, applyReplacementsToNodes, loadReplacements,
-  replacementGroups, replacementVariations, replacementText } from '../replacements.js';
+  replacementGroups, keptVariations, replacementText } from '../replacements.js';
 import { viewTo } from '../router.js';
 
 const { reactive, ref, computed, watch, onMounted, onUnmounted, provide, inject } = window.Vue;
@@ -1248,15 +1248,18 @@ export default {
       // Judged against the text this form is actually going to send: rules for a
       // keyword the prompt does not contain are not alternatives, they are N ways
       // of producing the same prompt.
+      // Unticked tabs are left out here rather than filtered later: they are not
+      // jobs that were queued and cancelled, they are jobs that were never asked
+      // for.
       const replText = replaceableText(cfg.fields);
-      const variations = replacementVariations(replText);
+      const variations = keptVariations(replText);
       // Only the keywords with something to choose between get named: a label
       // repeating every rule in the list would be the same on every job.
       const multi = new Set(replacementGroups(replText).filter(g => g.live && g.rules.length > 1).map(g => g.key));
       const labelFor = (v, n) => (variations.length < 2 ? '' :
         '#' + (n + 1) + '/' + variations.length + ' · ' + v
           .filter(r => multi.has(String(r.from).trim().toLowerCase()))
-          .map(r => r.from + ' → ' + String(replacementText(r)).replace(/s+/g, ' ').trim().slice(0, 28))
+          .map(r => r.from + ' → ' + String(replacementText(r)).replace(/\s+/g, ' ').trim().slice(0, 28))
           .join(' · '));
       const base = { workflowFile: wf.value, workflowLabel: label, embeddedWf: inherit ? meta.embeddedWf : null, source: { path: s.path, name: s.name, type: s.type }, promptText: pf ? applyReplacements(pf.value) : '', loras: loras.length ? loras : null, preset: selectedPreset.value, seedPinned, nodeEdits: edits, runs, matchSize: matchSizeFor(mediaFields[0] && mediaFields[0].value) };
       // The prompt the job record shows is the one that job actually sends, so
@@ -1442,23 +1445,19 @@ export default {
 
     const andList = names => (names.length === 1 ? names[0]
       : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1]);
-    // Several enabled rules for one keyword multiply the run out. It is the
-    // kind of thing that is obvious once and expensive to rediscover at run 48,
-    // so the number is stated before the button rather than after it.
+    // Every text field this run will rewrite. The rules panel is judged against
+    // the same string, or its tabs are not the jobs the button queues.
+    const replScope = computed(() => replaceableText(cfg.fields));
+    // How many prompts this run fans out to, for the counts beside the button.
+    // The statement of it lives in the replacement panel's own summary now — it
+    // is one line there, on the control that decides it, where a red block here
+    // was repeating what the tabs directly below it already show.
     //
-    // Counted over the same groups remix() will fan out over — the live ones,
-    // for the text this form holds now. A warning built from the rule list alone
-    // said ×6 for a workflow whose prompt mentions none of the keywords, and the
-    // run agreed with it: six identical jobs.
-    const variationWarn = computed(() => {
-      const groups = replacementGroups(replaceableText(cfg.fields)).filter(g => g.live && g.rules.length > 1);
-      if (!groups.length) return null;
-      const variations = groups.reduce((n, g) => n * g.rules.length, 1);
-      const jobs = Math.max(1, batchCount.value);
-      const list = andList(groups.map(g => g.label));
-      return { list, variations, jobs, total: jobs * variations,
-               runs: jobs * variations * (parseInt(runCount.value, 10) || 1) };
-    });
+    // Counted the way remix() fans out: the ticked combinations, judged against
+    // the text this form holds now. A count built from the rule list alone said
+    // ×6 for a workflow whose prompt mentions none of the keywords, and the run
+    // agreed with it: six identical jobs.
+    const runVariations = computed(() => keptVariations(replScope.value).length);
     // The other half of the same question. A keyword with two rules that this
     // prompt never mentions used to be the reason for a ×2 nobody asked for;
     // now it is the reason for a ×2 not appearing, and silence about that is how
@@ -1475,7 +1474,7 @@ export default {
       const f = (cfg.fields || []).find(x => x.kind === 'prompt' && x.enabled && !x.variant);
       return f && f.value != null ? String(f.value) : '';
     });
-    return { promptFieldText, promptChoice, pickWorkflow, resolvePromptChoice, variationWarn, idleVariations,
+    return { promptFieldText, replScope, promptChoice, pickWorkflow, resolvePromptChoice, runVariations, idleVariations,
       store, src, tab, runCount, batchCount, workflows, wf, wfGroups, cfg, selectedPreset, scSaving, scSaved, canShortcut, shortcutHint, saveShortcut, deleteShortcut, isShortcut, currentWfLabel, currentWfShort,
       canUpdateWf, wfUpdating, wfUpdated, updateWorkflow, meta, job, isVideo, mediaUrl, toolsMenu, toolItem, remix, cancelJob, close, saveMsg, nodeFilter, saveLog, filteredNodes, nodeInputs,
       nodeEdits, editVal, setEdit,
@@ -1558,9 +1557,11 @@ export default {
             </div>
             <div v-else-if="cfg.error" class="rmx-mut">Couldn’t load fields: {{ cfg.error }}</div>
             <div v-else>
-              <workflow-fields :cfg="cfg" :preset="selectedPreset" @update:preset="selectedPreset = $event">
-                <replacement-rules :prompt="promptFieldText"></replacement-rules>
-              </workflow-fields>
+              <!-- Nothing in the form's slot here any more: the replacement
+                   rules sit at the top of the Run tab instead. The inspect page
+                   still fills it — it is one page, with no second tab to move
+                   them to. -->
+              <workflow-fields :cfg="cfg" :preset="selectedPreset" @update:preset="selectedPreset = $event"></workflow-fields>
             </div>
             <details class="rmx-hidden" v-if="meta.embedded" style="margin-top:12px">
               <summary>Source workflow · {{ Object.keys(meta.embedded).length }} nodes</summary>
@@ -1580,14 +1581,9 @@ export default {
               </div>
             </details>
           </div>
-          <!-- Run tab: run count, remix, status, log, and output thumbnails -->
+          <!-- Run tab: run count, remix, status, log, output thumbnails, and the
+               replacement rules under all of it -->
           <div class="rmx-runsec" v-show="tab==='run'">
-            <div v-if="variationWarn" class="rmx-varwarn">
-              You have multiple variations enabled for <b>{{ variationWarn.list }}</b>.
-              This will multiply {{ variationWarn.jobs }} job{{ variationWarn.jobs === 1 ? '' : 's' }}
-              by {{ variationWarn.variations }} variations, resulting in
-              <b>{{ variationWarn.total }} jobs</b> ({{ variationWarn.runs }} runs).
-            </div>
             <div v-if="idleVariations" class="rmx-varidle">
               Variations for <b>{{ idleVariations }}</b> are set, but this prompt doesn't use
               {{ idleVariations.indexOf(' and ') < 0 ? 'it' : 'them' }} — so they don't multiply the run.
@@ -1596,7 +1592,7 @@ export default {
               <select class="rmx-inp" v-model="runCount" style="width:70px" title="Number of runs"><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option><option value="5">5×</option><option value="10">10×</option><option value="20">20×</option></select>
               <button v-if="!job || job.status!=='running'" class="rmx-btn go" @click="remix" :disabled="!wf">▶ Remix</button>
               <button v-else class="rmx-btn cancel" @click="cancelJob(job)">■ Cancel</button>
-              <span v-if="batchCount" class="rmx-mut" style="font-size:12px" :title="batchCount + ' selected files × ' + runCount + ' runs'">{{ batchCount }} files → {{ batchCount * (variationWarn ? variationWarn.variations : 1) }} jobs, {{ batchCount * (variationWarn ? variationWarn.variations : 1) * (parseInt(runCount,10)||1) }} runs total</span>
+              <span v-if="batchCount" class="rmx-mut" style="font-size:12px" :title="batchCount + ' selected files × ' + runCount + ' runs'">{{ batchCount }} files → {{ batchCount * runVariations }} jobs, {{ batchCount * runVariations * (parseInt(runCount,10)||1) }} runs total</span>
               <span class="rmx-status" v-if="job">{{ job.status==='running' ? (job._node||'…') : (job._node || job.status) }}</span>
               <span class="rmx-status" v-else>close this anytime — runs keep going in Jobs</span>
             </div>
@@ -1614,6 +1610,13 @@ export default {
                          @open="openResultFile(t)" @remix="remixResult(t)" />
               <div v-for="n in pendingSlots" :key="'wait'+n" class="rmx-out rmx-out-wait" :title="'Run ' + (job.results.length + n) + ' of ' + (job.runs || 1)"><span class="spinner"></span></div>
             </div>
+            <!-- Last, under everything the tab has to show. It is folded shut,
+                 and its summary states what the button above is about to queue —
+                 which is the line worth having in reach, not the twelve tabs
+                 behind it. Above the button it pushed the button itself down the
+                 page; below the outputs it is where you go when the count on the
+                 summary is not the one you wanted. -->
+            <replacement-rules :prompt="promptFieldText" :scope="replScope"></replacement-rules>
           </div>
         </div>
       </div>

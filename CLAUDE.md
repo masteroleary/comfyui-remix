@@ -67,7 +67,9 @@ usually the same bug: something the host provided instead of the component.
   field has 🖼 Browse wherever it is mounted), and it owns no state: `cfg.fields`
   are reactive objects the controls write straight into, and the host reads them
   back when it builds a run. The host contributes only its own extras, through
-  the slot — the replacement rules, in both cases.
+  the slot: the inspect page puts the replacement rules there, above the prompt
+  they rewrite. The dialog does not — it has a Run tab, and the rules belong at
+  the top of it, beside the button that queues what they produce.
   It also owns **Match Input Image**: a workflow with a width/height pair *and*
   an image input is stating its frame size twice, so the tick appears under the
   size fields, starts on, and greys them out. The tick and the two field ids it
@@ -140,8 +142,11 @@ surface did nothing to a run started from it.
 ### Prompt replacements
 
 The rules are a shared list in `app/replacements.js`; `ReplacementRules.js` is
-the editor both hosts mount through the form's slot. Three things about it are
-load-bearing:
+the editor both hosts mount — the inspect page through the form's slot, the
+dialog at the top of its Run tab, where the tabs below say what the button is
+about to queue. The list and the editor are deliberately different shapes: the
+list is one rule per keyword-and-value pair, the editor is one row per keyword.
+Several things about it are load-bearing:
 
 - **The preview is painted by a second walk of the pipeline, and it checks
   itself.** `paintReplacements` returns `[{text, rule}]` so each replacement's
@@ -152,15 +157,73 @@ load-bearing:
   against `applyReplacements` and returns `null` on any disagreement; the editor
   then shows the plain string. The tidy-up steps live in one `STRIP_STEPS` table
   both walks read, for the same reason.
+- **The preview is one tab per prompt the run will send, not just the first.**
+  A run fans out over the variations below, and until they were tabs the other
+  prompts could not be read anywhere — they arrived as images. Each tab is a
+  line, and its label is what that combination picked: the title each
+  `[keyword]` resolved to, in the colour of the row that put it there, which is
+  the colour those words then appear in in the paragraph underneath. *Large
+  Adult · Luscious Brunette · Tiny Female · Small Tan* is a prompt you can pick
+  out of a list of twelve; *Prmpt 7* is only not *Prmpt 6*. The titles run in the
+  order the keyword rows are listed beside them, not the order the rules are
+  stored: reading down the rows and along a tab give the same sequence, which is
+  also the order the palette runs in. One per line for the
+  same reason — eleven titles do not fit beside eleven more — and the stack
+  scrolls rather than pushing the paragraph off screen. The keyword is on the
+  hover, not in the label: it is already on the row, and repeated in front of
+  every title it is a column of noise. A combination that picked nothing falls
+  back to its number, or its tab would be an empty line. The tabs are counted
+  against the prompt on screen, so a group it cannot reach does not open a row
+  of tabs holding the identical paragraph. Two tabs reading the same is not a
+  bug when the run will also queue both — a keyword only one variation
+  introduces does that, and identical labels are the plainest way that has ever
+  been visible.
+- **Each tab is ticked, and unticking one leaves that prompt out of the run.**
+  Three keywords with three answers each is 27 jobs, and it is usually five of
+  them that were wanted; the tabs are where those five can be picked, since they
+  are the only place the 27 prompts can be read. `keptVariations` is what both
+  run sites queue from, so the tick is a job that was never asked for rather
+  than one queued and cancelled — and the count in the panel's summary is the
+  ticked one, or it would carry on saying 12 after the ticks that fixed it.
+  The ticks live in `variationSkips` in the module, beside the rules, keyed on
+  **what the combination is** — each *choice's* find and the prompt it resolves
+  to — never on its position, because the list is rebuilt on every read and an
+  index means a different prompt the moment a rule is added. Only the choices:
+  a combination carries every enabled rule, but the solo ones and the unreachable
+  ones are in all of them and say nothing about which this is, and keying on them
+  meant switching any unrelated rule on or off rewrote every key at once and the
+  panel came back fully ticked. That is what carries them across closing the
+  panel, the dialog and the route; they are not written to disk, so a reload
+  starts everything ticked. The last ticked box is disabled
+  rather than refusing the click: a checkbox bound to a value that did not
+  change has already been visibly emptied by the browser, and Vue has no reason
+  to repaint it.
 - **Several enabled rules for one keyword are variations, not a queue.** The
   first used to win and the rest silently did nothing — by the time the second
   looked, the token had already been replaced. Now `replacementVariations()`
   returns every combination as a complete rule list, and a run queues one job
   per combination (times the files in a multi-file pick). Order inside a list
-  stays the order the rules were typed, because a free-text rule can rewrite
-  what an earlier one produced. The Run tab states the multiplication in red
-  before the button, since finding it out at job 48 is the failure that warning
-  exists to prevent.
+  stays the order the rules were typed — which is the order they run in within
+  each phase below — because a free-text rule can rewrite what an earlier one
+  produced. The panel's own summary states the multiplication — *Prompt
+  Replacements — 9 active, 12 jobs total* — since finding it out at job 48 is
+  the failure that number exists to prevent. It is on the summary rather than in
+  a red block on the Run tab because the summary is the line that is legible
+  with the panel shut, and the panel is the control that decides it: the tabs
+  directly under it are those twelve prompts, and unticking them is how the
+  twelve becomes five.
+- **`[keyword]` rules resolve first; the literal ones run over what they
+  produced.** A literal rule used to run in list order alongside the keywords,
+  which meant it saw the prompt as typed — and the prompt as typed says
+  `[female]`. `blonde → platinum` did nothing to the blonde that arrives later
+  inside the library entry, while sitting in the list right beside the rule that
+  brought it in. So `applyReplacements` sweeps the keyword rules until nothing
+  changes, then runs each literal rule once over the finished text, then sweeps
+  the keywords once more for a literal replacement that wrote a `[keyword]` of
+  its own. Only the keyword rules repeat: `woman → beautiful woman` contains its
+  own find and would grow on every pass. `paintReplacements` walks the same two
+  phases in the same order, or its self-check fails and the preview loses its
+  colours.
 - **Only the keywords this run can actually reach multiply it.** Rules for a
   keyword the prompt never mentions replace nothing, so fanning out over them
   queues N identical jobs — which is what switching to a workflow whose prompt
@@ -178,27 +241,39 @@ load-bearing:
   same exported `SKIP_KEY`. Rules that are set and cannot fire get a quiet line
   under the red one rather than silence, or the multiplication that stopped
   appearing has nowhere to say why.
+- **A row is a keyword; its answers are a tick list.** The stored list is still
+  one rule per keyword-and-value pair — that is what makes several answers to one
+  keyword the variations a run fans out over — but the editor above it no longer
+  is. Four answers for `[scene]` used to be four rows saying "[scene]" four
+  times, each carrying a `2/4` tag to explain why. They are one row now, and its
+  value cell opens a menu of tick boxes over the shelf the keyword names: ticking
+  one adds the rule, unticking takes it back out, and the list on disk and the
+  run reading it never learn that the editor changed shape. A new rule inherits
+  the row's switch, so answering a row that is off does not quietly start it
+  running, and it is appended rather than spliced in — the stored order is the
+  order a run applies them in. Unticking the last answer leaves the row, waiting
+  to be answered again; deleting the keyword is what the ✕ is for, and it takes
+  every answer with it.
+- **The colour follows the row, and the row's place on screen.** One keyword is
+  one colour however many answers it has, or its dot could only ever show one of
+  them. Counted down the rows as displayed rather than as stored, because the
+  stored order shifts under every tick — removing an answer splices a rule out
+  and everything after it moves up one — and colouring by that had two rows
+  swapping colours, repainting half the preview, for an edit that changed one
+  word of it.
 - **The list is sorted for reading, never for running.** Rows render through a
-  sorted view carrying each rule's real index; the stored array keeps the order
-  it was typed in, which is the order it executes in. Alphabetical puts a
-  keyword's variations next to each other, and a row with nothing typed yet
-  sorts last so a new one does not jump away from the button that made it.
-- **The `2/3` tag is the control that grows its own group.** It is the one cell
-  that already knows what the group is, so clicking it adds another rule for the
-  same find, holding the next prompt off that keyword's shelf that no sibling —
-  switched off ones included — has taken. A row with no group yet shows a `＋`
-  in the same cell, since the second rule is what *makes* a group and having to
-  know that in advance is what this saves; a row with nothing to find keeps the
-  empty cell. The new rule is appended, never spliced in: the tag's number is
-  its place in the stored list, so inserting one would renumber its neighbours
-  and shift every colour after it. What moves is the display order, which places
-  it just after the last of its siblings rather than at the bottom of the list,
-  out of sight of the tag that made it. It inherits the source row's switch, so
-  adding to a group that is off does not quietly start it running.
+  sorted view; the stored array keeps the order it was typed in, which is the
+  order it executes in. Alphabetical, with a row that has nothing typed in it yet
+  last so a new one does not jump away from the button that made it. The sort is
+  taken when the panel opens and held: sorting live moved the row out from under
+  the cursor as its keyword was typed.
 - **The find box offers the keywords rather than asking you to remember them** —
   the ones this prompt actually contains first, since only a rule for one of
-  those changes this run, then the library's categories and any keyword another
-  rule names, marked as not present.
+  those changes this run; then the ones a rule *pulls in*, each labelled with the
+  rule that does it, because a keyword nested in a library prompt (`[female]` →
+  "…, `[hair]`, …") fires in this run just as surely as one the prompt said out
+  loud, and `reachableRules` is what decides both; then the library's categories
+  and any keyword another rule names, marked as not present.
 - **`loadReplacements` only believes an answer shaped like a list.** It seeds
   from localStorage so the editor is never blank, then adopts the server's copy;
   if the server has none and this browser does, it pushes its own up. That push

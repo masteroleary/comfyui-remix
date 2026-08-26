@@ -31,7 +31,7 @@ import MediaTile from '../components/MediaTile.js';
 import { launchJob, cancelJob, jobs, link, presetFromEmbedded, outputItems, forgetOutput } from '../components/RemixDialog.js';
 import ReplacementRules from '../components/ReplacementRules.js';
 import WorkflowFields, { replaceableText } from '../components/WorkflowFields.js';
-import { replacementVariations, replacementGroups, replacementText, applyReplacements } from '../replacements.js';
+import { keptVariations, replacementGroups, replacementText, applyReplacements } from '../replacements.js';
 
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = window.Vue;
 const { useRoute, useRouter } = window.VueRouter;
@@ -586,6 +586,9 @@ export default {
         })
         .catch(e => { fieldsMsg.value = 'Save failed: ' + e.message; });
     }
+    // Every text field a run from this page will rewrite — what the rules panel
+    // counts its tabs against, so they are the jobs ▶ Run actually queues.
+    const replScope = computed(() => replaceableText((fieldConfig.value && fieldConfig.value.fields) || []));
     // The prompt the rules will rewrite, for the editor to preview.
     const promptFieldText = computed(() => {
       const f = ((fieldConfig.value && fieldConfig.value.fields) || []).find(x => x.kind === 'prompt' && x.enabled && !x.variant);
@@ -715,12 +718,13 @@ export default {
       // keyword the prompt does not contain are not alternatives, so they fan out
       // over nothing rather than queueing identical jobs.
       const replText = replaceableText(cfgNow.fields);
-      const variations = replacementVariations(replText);
+      // Ticked tabs only — an unticked one is a job that was never asked for.
+      const variations = keptVariations(replText);
       const multi = new Set(replacementGroups(replText).filter(g => g.live && g.rules.length > 1).map(g => g.key));
       const labelFor = (v, n) => (variations.length < 2 ? '' :
         '#' + (n + 1) + '/' + variations.length + ' · ' + v
           .filter(r => multi.has(String(r.from).trim().toLowerCase()))
-          .map(r => r.from + ' → ' + String(replacementText(r)).replace(/s+/g, ' ').trim().slice(0, 28))
+          .map(r => r.from + ' → ' + String(replacementText(r)).replace(/\s+/g, ' ').trim().slice(0, 28))
           .join(' · '));
       const jobParams = {
         workflowFile: inherit ? '__inherit__' : wfName.value,
@@ -962,7 +966,7 @@ export default {
 
       selectedPreset,
       // detected fields
-      fieldConfig, promptFieldText, saveFieldEdits, fieldsMsg,
+      fieldConfig, promptFieldText, replScope, saveFieldEdits, fieldsMsg,
       canUpdateWf, wfUpdating, wfUpdated, updateWorkflow,
       loadFieldConfig,
 
@@ -1026,7 +1030,7 @@ export default {
            the slot — those are per-surface state, not part of the form. -->
       <workflow-fields v-if="fieldConfig" :cfg="fieldConfig"
                        :preset="selectedPreset" @update:preset="selectedPreset = $event">
-        <replacement-rules :prompt="promptFieldText"></replacement-rules>
+        <replacement-rules :prompt="promptFieldText" :scope="replScope"></replacement-rules>
       </workflow-fields>
       <div v-else-if="showRun" class="fc-empty">
         Nothing detected in this workflow, so there is nothing to set. ↻ Refresh detection re-reads the file.

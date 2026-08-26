@@ -117,9 +117,78 @@ export function replacementVariations(text) {
   const at = r => (order.has(r) ? order.get(r) : 0);
   return combos.map(c => c.slice().sort((a, b) => at(a) - at(b)));
 }
-// How many prompts a run will produce.
+// How many prompts the rules multiply out to, before anything is unticked.
 export function variationCount(text) {
   return replacementGroups(text).reduce((n, g) => n * (g.live ? g.rules.length : 1), 1);
+}
+
+// ── Leaving one out ───────────────────────────────────────────────────────
+// The preview's tabs are ticked by default and can be unticked, which drops that
+// one prompt from the run. It is the cheap answer to what the fan-out makes easy
+// to do by accident: three keywords with three answers each is 27 jobs, and it
+// is usually five of them that were wanted.
+//
+// Keyed on what the combination *is* — each choice's find and the prompt it
+// resolves to — never on where it sits in the list. The list is rebuilt from the
+// rules on every read, so an index means a different prompt the moment a rule is
+// added, and a tick that quietly slides onto another combination is worse than
+// one that is forgotten.
+//
+// The choices, and nothing else. A combination carries every enabled rule, but
+// most of them are in all of the combinations — the solo rules, and the ones for
+// a keyword this text cannot reach — so they say nothing about which one this is.
+// Keying on them anyway meant switching any unrelated rule on or off rewrote
+// every key at once and the whole panel came back ticked, which is not what
+// ticking one keyword's box asked for. A rule earns a place in the key by being
+// picked: it appears exactly once in this list (a group riding along unreachable
+// contributes all of its rules, not one) and its keyword has more than one
+// enabled rule to pick from.
+//
+// So the keys survive everything that does not change what there is to choose
+// between, and when something does — the second [hair] rule switched off, which
+// really does leave two prompts where there were four — the ticks for the
+// combinations that no longer exist stop matching, and come back if it is
+// switched on again.
+//
+// Held in the module, next to the rules, because the run is what has to honour
+// it and the editor is gone every time the panel is closed. A key the current
+// rules cannot produce simply never matches, which is what makes a stale one
+// harmless rather than something to garbage-collect.
+export const variationSkips = reactive(new Set());
+const foldFrom = r => String(r && r.from ? r.from : '').trim().toLowerCase();
+const ruleKey = r => foldFrom(r) + '=' + ((r && (r.promptId || r.to)) || '');
+const tally = (list) => {
+  const n = new Map();
+  for (const r of list) n.set(foldFrom(r), (n.get(foldFrom(r)) || 0) + 1);
+  return n;
+};
+export const variationKey = (list) => {
+  const here = tally(list || []);
+  const all = tally(activeReplacements());
+  return (list || [])
+    .filter(r => here.get(foldFrom(r)) === 1 && (all.get(foldFrom(r)) || 0) > 1)
+    .map(ruleKey).join('\u0001');
+};
+// An empty key is a combination with nothing chosen in it — the only one there
+// is. It cannot be skipped, and refusing it here means no stray '' can ever sit
+// in the set matching every such combination in every workflow.
+export const isVariationSkipped = list => {
+  const k = variationKey(list);
+  return !!k && variationSkips.has(k);
+};
+export function setVariationSkipped(list, skip) {
+  const k = variationKey(list);
+  if (!k) return;
+  if (skip) variationSkips.add(k); else variationSkips.delete(k);
+}
+// What a run queues. Never empty: a Run button that does nothing, with every
+// tab on screen saying why in a place nobody is looking, is the one outcome
+// worth ruling out here as well as in the editor — which keeps the last tick
+// from being cleared in the first place.
+export function keptVariations(text) {
+  const all = replacementVariations(text);
+  const kept = all.filter(v => !isVariationSkipped(v));
+  return kept.length ? kept : all;
 }
 
 // What a rule substitutes. A [keyword] rule stores the picked prompt as an id,
@@ -171,12 +240,25 @@ export function stripLeftoverTokens(text) {
 // deletes what did not resolve, so the run comes back subtly wrong rather than
 // visibly broken.
 //
-// So: every rule once, then the [keyword] rules again until nothing changes.
+// So: the [keyword] rules first, repeated until nothing changes, and only then
+// the literal ones — once, over the text the keywords actually produced.
+//
+// The order is what makes a literal rule mean what it says. Run in list order
+// with the keywords, "blonde -> platinum" saw the prompt as typed, and the
+// prompt as typed says [female]: the word it was written for arrives later,
+// carried in by the shelf, and the rule that was sitting right there in the list
+// did nothing to it. Now every literal rule reads the finished text, so it
+// replaces its word wherever it ends up — whether it was in the prompt or came
+// out of a library entry.
+//
 // Only the keyword rules repeat — a free-text rule like woman -> beautiful woman
 // contains its own "find" and would grow on each pass, while a keyword rule
 // cannot normally reintroduce its own bracketed token. The cap is for when it
 // does: two rules feeding each other stop, and the leftover sweep clears the
-// tokens the cap left rather than sending brackets to the model.
+// tokens the cap left rather than sending brackets to the model. The keywords
+// sweep once more after the literal rules for the other direction — a literal
+// replacement that writes a [keyword] of its own resolves rather than being
+// swept away as unclaimed.
 //
 // Replacements are inserted through a function, not a string, so a $ in prompt
 // text stays a $ — ComfyUI's own dynamic-prompt syntax writes {2$$a|b}, and the
@@ -187,14 +269,20 @@ export function applyReplacements(text, only) {
   // the right answer when there is nothing to vary, and the old first-wins
   // answer when there is, which is why a run always passes one.
   const rules = only || activeReplacements();
-  let out = text;
-  for (const r of rules) out = out.replace(new RegExp(escRe(r.from), 'gi'), () => replacementText(r));
   const keyworded = rules.filter(isKeywordRule);
-  for (let pass = 0; pass < 4 && keyworded.length && /[[{]/.test(out); pass++) {
-    const before = out;
-    for (const r of keyworded) out = out.replace(new RegExp(escRe(r.from), 'gi'), () => replacementText(r));
-    if (out === before) break;
-  }
+  const literal = rules.filter(r => !isKeywordRule(r));
+  let out = text;
+  const apply = r => { out = out.replace(new RegExp(escRe(r.from), 'gi'), () => replacementText(r)); };
+  const sweepKeywords = () => {
+    for (let pass = 0; pass < 4 && keyworded.length && /[[{]/.test(out); pass++) {
+      const before = out;
+      for (const r of keyworded) apply(r);
+      if (out === before) break;
+    }
+  };
+  sweepKeywords();
+  for (const r of literal) apply(r);
+  sweepKeywords();
   return stripLeftoverTokens(out);
 }
 
@@ -248,13 +336,21 @@ export function paintReplacements(text, only) {
     const s = paintStep(out, owner, new RegExp(escRe(r.from), 'gi'), () => ({ text: replacementText(r), rule }));
     out = s.text; owner = s.owner;
   };
-  for (const r of rules) run(r);
+  // The same two phases as applyReplacements, in the same order. This walk is
+  // checked against that one at the end, so a divergence here does not paint
+  // the wrong thing — it drops the colours entirely.
   const keyworded = rules.filter(isKeywordRule);
-  for (let pass = 0; pass < 4 && keyworded.length && /[[{]/.test(out); pass++) {
-    const before = out;
-    for (const r of keyworded) run(r);
-    if (out === before) break;
-  }
+  const literal = rules.filter(r => !isKeywordRule(r));
+  const sweepKeywords = () => {
+    for (let pass = 0; pass < 4 && keyworded.length && /[[{]/.test(out); pass++) {
+      const before = out;
+      for (const r of keyworded) run(r);
+      if (out === before) break;
+    }
+  };
+  sweepKeywords();
+  for (const r of literal) run(r);
+  sweepKeywords();
   if (out.indexOf('[') >= 0) {
     for (const [re, rep] of STRIP_STEPS) {
       // Whatever these steps put back is whitespace standing in for what they
