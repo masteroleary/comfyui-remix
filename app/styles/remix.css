@@ -181,6 +181,15 @@ select.rmx-inp{cursor:pointer}
    surface in the app, which left the switch stating its choice in the one colour
    that means "a panel is here". */
 .rmx-tabs button.on{background:var(--switch-on);color:#fff}
+/* ── Which version of the prompt ──────────────────────────────────────────
+   Above the prompt field's own label, so the control that overwrites the box is
+   read before the box. Left-aligned to the field and otherwise plain .rmx-tabs:
+   it is the same control as every other switch in the app and shrinking it only
+   made it look like a lesser one.
+
+   Neither side lit means the text has been edited by hand and is no longer
+   either of them. The switch stays — both versions are one click away. */
+.rmx-palt{align-self:flex-start;width:max-content;max-width:100%;margin-bottom:6px}
 .rmx-btn2{background:#2c2c2e;border:1px solid #48484a;border-radius:8px;color:#f2f2f7;cursor:pointer;padding:6px 12px;font-size:12px}
 .rmx-btn2:disabled{opacity:.45;cursor:not-allowed}
 .rmx-inp.taken{border-color:#e06c6c}

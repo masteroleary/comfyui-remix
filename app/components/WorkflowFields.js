@@ -109,6 +109,46 @@ export const replaceableText = fields => (fields || [])
   .map(f => f.value)
   .join('\n');
 
+// ── Which version of the prompt ────────────────────────────────────────────
+// A generated file holds this prompt twice: once as it ran, once as it was
+// typed — see promptAlternatives in RemixDialog.js for why both survive. When
+// they differ, the field says so and lets you take either.
+//
+// It sits above the field's own label rather than beside the box, because it
+// governs the whole field: what it changes is which text is in there, and a
+// control that overwrites what you are looking at should be read before the
+// thing it overwrites, not after.
+//
+// Neither side lights up once the text has been edited by hand — that is a
+// third state the switch cannot offer, and pretending one of the two is still
+// selected would say the box holds something it does not.
+const PromptSwitch = {
+  name: 'PromptSwitch',
+  props: { field: { type: Object, required: true }, alt: { type: Object, default: null } },
+  setup(props) {
+    const show = computed(() => !!(props.alt && props.alt.keyword && props.alt.remix
+      && props.field.kind === 'prompt' && !props.field.variant));
+    const same = (a, b) => String(a == null ? '' : a).trim() === String(b == null ? '' : b).trim();
+    const which = computed(() => {
+      if (!props.alt) return '';
+      if (same(props.field.value, props.alt.keyword)) return 'keyword';
+      if (same(props.field.value, props.alt.remix)) return 'remix';
+      return '';
+    });
+    const use = (k) => { if (props.alt && props.alt[k] != null) props.field.value = props.alt[k]; };
+    const tip = (k) => (k === 'keyword'
+      ? 'The prompt as it was typed, with its [keyword]s still in it — replaces what is in the box'
+      : 'The prompt as it actually ran, with every replacement resolved — replaces what is in the box');
+    return { show, which, use, tip };
+  },
+  template: `
+    <div v-if="show" class="rmx-tabs rmx-palt">
+      <button type="button" :class="{on: which === 'keyword'}" :title="tip('keyword')" @click="use('keyword')">Keyword Prompt</button>
+      <button type="button" :class="{on: which === 'remix'}" :title="tip('remix')" @click="use('remix')">Remix Prompt</button>
+    </div>
+  `,
+};
+
 // ── One control ────────────────────────────────────────────────────────────
 // Renders whatever the field config says this field is: a prompt box, a seed
 // with its pin, a lora stack, a combo, a number, a media path with a picker.
@@ -267,7 +307,7 @@ const MatchInput = {
 // ── The form ───────────────────────────────────────────────────────────────
 export default {
   name: 'WorkflowFields',
-  components: { FieldControl, MediaBrowser, MatchInput },
+  components: { FieldControl, MediaBrowser, MatchInput, PromptSwitch },
   props: {
     // The live field config: { fields: [...], presets: [...] }, mutated in
     // place by the controls — the contract both hosts already rely on.
@@ -580,6 +620,7 @@ export default {
       <slot v-if="promptAt === 'loose'"></slot>
       <div v-if="nodeGroups.loose.length" class="rmx-grid">
         <div v-for="f in nodeGroups.loose" :key="f.id" class="rmx-field" :class="{wide: isWide(f)}">
+          <prompt-switch :field="f" :alt="cfg.promptAlt"></prompt-switch>
           <label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" checked @change="f.enabled=false" title="Hide field"> {{ f.label }} <span v-if="f.help" class="rmx-info" tabindex="0" @click.prevent.stop><span class="rmx-tip">{{ f.help }}</span>i</span> <span v-if="f.unreachable" style="color:#ff9f0a" title="not on the output path">⚠</span></label>
           <field-control :field="f"></field-control>
         </div>
@@ -591,6 +632,7 @@ export default {
         <div class="rmx-nodegroup-title">{{ g.title }}</div>
         <div class="rmx-grid">
           <div v-for="f in g.fields" :key="f.id" class="rmx-field" :class="{wide: isWide(f)}">
+            <prompt-switch :field="f" :alt="cfg.promptAlt"></prompt-switch>
             <label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" checked @change="f.enabled=false" title="Hide field"> {{ f.label }} <span v-if="f.help" class="rmx-info" tabindex="0" @click.prevent.stop><span class="rmx-tip">{{ f.help }}</span>i</span> <span v-if="f.unreachable" style="color:#ff9f0a" title="not on the output path">⚠</span></label>
             <field-control :field="f"></field-control>
           </div>

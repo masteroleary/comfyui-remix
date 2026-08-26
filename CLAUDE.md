@@ -70,6 +70,23 @@ usually the same bug: something the host provided instead of the component.
   the slot: the inspect page puts the replacement rules there, above the prompt
   they rewrite. The dialog does not — it has a Run tab, and the rules belong at
   the top of it, beside the button that queues what they produce.
+  It also owns **Keyword Prompt | Remix Prompt**, the switch above the prompt
+  field. A file ComfyUI wrote holds this prompt twice — the `prompt` chunk it
+  executed, and the `workflow` chunk the client sent as pnginfo, which is the
+  same graph *before* `applyReplacementsToNodes` touched it, because the rules
+  only ever rewrite the built API prompt. So the text that ran and the text as
+  typed are both on disk, and a `[keyword]` that resolved into a paragraph is
+  recoverable. `promptAlternatives` (RemixDialog.js) pairs them **by node id**
+  rather than by running the prompt heuristic twice: the two chunks number their
+  nodes identically, so whichever node `mainPromptNode` picked out of the
+  executed graph is simply looked up in the visual one — guessing once per format
+  is how the two halves would end up describing different nodes and the switch
+  would offer a prompt from somewhere else. It returns null unless there is a
+  real difference, so a run with no rule behind it shows no switch. Both hosts
+  put the answer on `cfg.promptAlt`, the same route `matchInput` takes, and
+  clicking a side overwrites the field. Neither side lights up once the text has
+  been edited by hand — that is a third state the switch cannot offer, and
+  claiming one of the two would say the box holds something it does not.
   It also owns **Match Input Image**: a workflow with a width/height pair *and*
   an image input is stating its frame size twice, so the tick appears under the
   size fields, starts on, and greys them out. The tick and the two field ids it

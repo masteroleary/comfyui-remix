@@ -28,7 +28,8 @@ import { viewTo } from '../router.js';
 import MediaTile from '../components/MediaTile.js';
 // The run engine. It lives in RemixDialog for historical reasons (see the note
 // at the top of that file); what matters here is that there is exactly one.
-import { launchJob, cancelJob, jobs, link, presetFromEmbedded, outputItems, forgetOutput } from '../components/RemixDialog.js';
+import { launchJob, cancelJob, jobs, link, presetFromEmbedded, outputItems, forgetOutput,
+  promptAlternatives } from '../components/RemixDialog.js';
 import ReplacementRules from '../components/ReplacementRules.js';
 import WorkflowFields, { replaceableText } from '../components/WorkflowFields.js';
 import { keptVariations, replacementGroups, replacementText, applyReplacements } from '../replacements.js';
@@ -500,6 +501,11 @@ export default {
       for (const f of cfg.fields) {
         if ((f.control && f.control.type) === 'lora_rows' && !Array.isArray(f.value)) f.value = [];
       }
+      // Both versions of this file's prompt, for the switch above the field —
+      // the text that ran, and the text as it was typed before the replacement
+      // rules rewrote it. Null when the file has only one of them, or when they
+      // are the same.
+      cfg.promptAlt = promptAlternatives(promptData.value, workflowData.value);
       fieldConfig.value = cfg;
       fieldCfgName.value = name;
       selectedPreset.value = '';

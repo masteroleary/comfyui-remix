@@ -98,22 +98,55 @@ function expandDateTokens(s) {
 // The longest plausible positive prompt in a flat API prompt object. A heuristic,
 // and treated as one: it seeds a named workflow's prompt field but never Inherit's
 // or a shortcut's, where the real values are already known.
-function mainPromptOf(promptObj) {
-  if (!promptObj || typeof promptObj !== 'object') return '';
+function mainPromptNode(promptObj) {
+  if (!promptObj || typeof promptObj !== 'object') return { id: '', text: '' };
   const tiers = [[], [], []];
-  for (const n of Object.values(promptObj)) {
+  for (const [id, n] of Object.entries(promptObj)) {
     if (!n || !n.inputs) continue;
     const title = (n._meta && n._meta.title) || '';
     if (/negative|neg\b/i.test(title)) continue;
     let text = '';
     for (const v of Object.values(n.inputs)) if (typeof v === 'string' && v.length > text.length) text = v;
     if (!text.trim()) continue;
-    if (/main/i.test(title) && /prompt/i.test(title)) tiers[0].push(text);
-    else if (/pos/i.test(title) && /prompt/i.test(title)) tiers[1].push(text);
-    else if (text.length > 20) tiers[2].push(text);
+    if (/main/i.test(title) && /prompt/i.test(title)) tiers[0].push({ id, text });
+    else if (/pos/i.test(title) && /prompt/i.test(title)) tiers[1].push({ id, text });
+    else if (text.length > 20) tiers[2].push({ id, text });
   }
-  for (const t of tiers) if (t.length) return t.sort((a, b) => b.length - a.length)[0];
-  return '';
+  for (const t of tiers) if (t.length) return t.sort((a, b) => b.text.length - a.text.length)[0];
+  return { id: '', text: '' };
+}
+function mainPromptOf(promptObj) { return mainPromptNode(promptObj).text; }
+
+// ── The same prompt, before and after the rules ───────────────────────────
+// A file ComfyUI wrote carries two graphs: the `prompt` chunk it executed, and
+// the `workflow` chunk the client sent as pnginfo — which is the same graph
+// before applyReplacementsToNodes touched it, because the rules only ever
+// rewrite the built API prompt. So the text that ran and the text as typed are
+// both on disk, and a keyword that resolved to a paragraph is recoverable.
+//
+// Paired by node id rather than by a second heuristic: the two chunks number
+// their nodes the same way, so whichever node mainPromptNode picked out of the
+// executed graph can simply be looked up in the visual one. Guessing twice —
+// once per format — is how the two halves would end up describing different
+// nodes and the switch would offer a prompt from somewhere else entirely.
+//
+// Null unless there is a real difference to offer. Equal texts mean no rule
+// fired, and a switch between two identical prompts is a control that does
+// nothing.
+export function promptAlternatives(apiPrompt, visualGraph) {
+  const ran = mainPromptNode(apiPrompt);
+  if (!ran.id || !ran.text.trim() || !visualGraph) return null;
+  let node = null;
+  const look = (nodes) => { for (const n of nodes || []) if (String(n.id) === String(ran.id)) node = n; };
+  look(visualGraph.nodes);
+  // Subgraphs keep their own node list, and a workflow built out of them holds
+  // its prompt down there rather than at the top level.
+  if (!node) for (const sg of (visualGraph.definitions && visualGraph.definitions.subgraphs) || []) look(sg.nodes);
+  if (!node) return null;
+  let typed = '';
+  for (const w of node.widgets_values || []) if (typeof w === 'string' && w.length > typed.length) typed = w;
+  if (!typed.trim() || typed.trim() === ran.text.trim()) return null;
+  return { keyword: typed, remix: ran.text };
 }
 function firstVideoFrameBlob(videoUrl) {
   return new Promise((resolve, reject) => {
@@ -805,7 +838,7 @@ export default {
     });
 
     const workflows = ref([]); const wf = ref('');
-    const cfg = reactive({ fields: [], presets: [], loading: true, error: '' });
+    const cfg = reactive({ fields: [], presets: [], loading: true, error: '', promptAlt: null });
     const selectedPreset = ref('');
     const meta = reactive({ prompt: '', seed: null, embedded: null, embeddedWf: null, matchedWf: null, undetected: false, metadataFrom: '', unlistedWf: null, adding: false });
     const startedId = ref(null);
@@ -1103,6 +1136,11 @@ export default {
           // it carries was captured deliberately, so overwriting the prompt
           // with the source image's — a heuristic over the flat prompt — would
           // throw away the one thing the user saved the shortcut for.
+          // Both versions of this file's prompt, for the switch above the field.
+          // Offered whichever workflow is selected: Inherit opens on the typed
+          // one and this is how you reach what actually ran, a named workflow
+          // opens on what ran and this is how you get the keywords back.
+          cfg.promptAlt = promptAlternatives(meta.embedded, meta.embeddedWf);
           if (wf.value !== '__inherit__' && !isShortcut(wf.value)) {
             if (meta.prompt) { const pf = c.fields.find(f => f.kind === 'prompt' && !f.variant); if (pf) pf.value = meta.prompt; }
             // The seed the media was actually made with. Only prefill it when the
