@@ -123,6 +123,10 @@ html.auth-on .shell-settings{right:56px}
   background:rgba(0,0,0,.65);color:#c8c8cd;letter-spacing:.3px;
 }
 .card-tag.nsfw{background:rgba(120,20,20,.85);color:#ffd7d7}
+/* The embedded workflow still carries its [keyword]s, so this file can be
+   remixed as a template. Amber like everything else in the app that means "there
+   is a replacement in play". */
+.card-tag.kw{background:rgba(90,55,10,.85);color:#ffcf8a}
 
 /* The info bar is a target, not a label: it raises Remix where the thumbnail
    above it opens the viewer. Only tiles Remix can act on carry the badge and

@@ -320,6 +320,17 @@ Several things about it are load-bearing:
   "…, `[hair]`, …") fires in this run just as surely as one the prompt said out
   loud, and `reachableRules` is what decides both; then the library's categories
   and any keyword another rule names, marked as not present.
+- **A thumbnail says when a file is still a template.** The `prompt` chunk a
+  file carries is what ran, so its keywords are long gone; the `workflow` chunk
+  is the same graph before the rules touched it, so the template survives there.
+  The prompt index records the bracketed tokens found in that graph's text
+  widgets (`keywordTokensFromMeta`, skipping note nodes — markdown links are
+  `[text](url)` and every commented workflow would otherwise report `[Subgraph]`),
+  and `/api/list` narrows them to the ones this install has a rule for, so a
+  token nobody replaces is not a template but a word in brackets. The tile shows
+  a `kw` tag beside `wf`, naming them on the hover. Raw tokens are indexed
+  rather than a yes/no because whether one is "ours" depends on the rules, and
+  the rules change without the file changing.
 - **`loadReplacements` only believes an answer shaped like a list.** It seeds
   from localStorage so the editor is never blank, then adopts the server's copy;
   if the server has none and this browser does, it pushes its own up. That push

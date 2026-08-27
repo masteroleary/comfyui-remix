@@ -588,7 +588,7 @@ function embedVideoText(filePath, comment, cb) {
 // Maps PNG path -> embedded prompt text so /api/list search can match prompt
 // words, not just file names. Incremental by mtime, persisted across restarts.
 const PROMPT_INDEX_PATH = path.join(__dirname, 'app-prompt-index.json');
-const PROMPT_INDEX_VERSION = 5; // bump to force a full re-extract after extractor changes (v5: ffprobe was unresolvable under SYSTEM, so all videos indexed empty)
+const PROMPT_INDEX_VERSION = 6; // bump to force a full re-extract after extractor changes (v6: index the [keyword] tokens the embedded workflow still carries)
 
 // Content filter: indexed prompt text is matched against a term list (stored
 // base64-encoded — same repo-hygiene pattern as SANITIZE_RULES). An entry that
@@ -663,6 +663,50 @@ try {
   if (loaded && loaded.v === PROMPT_INDEX_VERSION && loaded.files) promptIndex = loaded;
 } catch {}
 
+// ── The keywords a file's workflow still carries ─────────────────────────
+// The prompt chunk is what ran, so its [keyword]s are long gone — replaced
+// before submit. The workflow chunk is the same graph before the rules touched
+// it, so the template survives there (see promptAlternatives in
+// app/components/RemixDialog.js). That is what makes a file remixable as a
+// template rather than as a finished sentence, and it is worth knowing from the
+// thumbnail rather than by opening it.
+//
+// Note nodes are skipped: they hold markdown, and markdown links are [text](url)
+// — every workflow with a comment in it would otherwise report [Subgraph] and
+// [guide] as keywords. Tokens carrying | or : are left out for the same reason
+// applyReplacements leaves them alone: those are ComfyUI dynamic prompts and
+// A1111 prompt editing, not keywords.
+//
+// The raw tokens are indexed rather than a yes/no, because whether one of them
+// is "ours" depends on the rules, and the rules change without the file
+// changing. The listing decides; the index only records what is in there.
+const KW_TOKEN_RE = /\[[a-z][a-z0-9 _-]{0,23}\]/gi;
+const NOTE_TYPE_RE = /note|markdown|comment/i;
+function keywordTokensFromMeta(meta) {
+  const out = new Set();
+  try {
+    const w = typeof meta.workflow === 'string' ? JSON.parse(meta.workflow) : meta.workflow;
+    if (!w) return [];
+    const eat = (nodes) => {
+      for (const n of nodes || []) {
+        if (!n || NOTE_TYPE_RE.test(n.type || '')) continue;
+        const wv = n.widgets_values;
+        const vals = Array.isArray(wv) ? wv : (wv && typeof wv === 'object' ? Object.values(wv) : []);
+        for (const v of vals) {
+          if (typeof v !== 'string' || v.length < 3 || v.length > 5000) continue;
+          for (const m of v.match(KW_TOKEN_RE) || []) {
+            out.add(m.trim().toLowerCase());
+            if (out.size >= 24) return;          // a cap, not a limit anyone should reach
+          }
+        }
+      }
+    };
+    eat(w.nodes);
+    for (const sg of ((w.definitions && w.definitions.subgraphs) || [])) eat(sg.nodes);
+  } catch {}
+  return [...out];
+}
+
 // Flatten the searchable text out of an embedded API prompt: every string input
 // on every node, skipping model/file references.
 // Only inputs whose key looks like prompt text — skips sampler names, file
@@ -725,10 +769,14 @@ async function buildPromptIndex() {
               try { (isPng ? extractPngMetadata : extractVideoMetadata)(fp, (err, m) => r(err ? null : m)); } catch { r(null); }
             });
             const text = meta ? promptTextFromMeta(meta) : '';
+            const kw = meta ? keywordTokensFromMeta(meta) : [];
             promptIndex.files[key] = {
               m: st.mtimeMs, t: text,
               w: (meta && (meta.prompt || meta.workflow)) ? 1 : 0,
               n: NSFW_RE.test(text) ? 1 : 0,
+              // Omitted when empty: this file is read and rewritten whole, and
+              // most entries have none.
+              ...(kw.length ? { k: kw } : {}),
             };
             added++;
             if (added % 25 === 0) await new Promise(r => setImmediate(r)); // stay responsive
@@ -1703,6 +1751,21 @@ function loadReplacementStore() {
   } catch { return { replacements: seededReplacements() }; }
 }
 
+// The [keyword]s the rules can currently resolve — every rule whose "find" is a
+// bracketed token, switched on or not. Off still counts: the rule exists, the
+// token in the file is one of ours, and the tag says what the file carries
+// rather than what a run would do with it today.
+function keywordSetFromRules() {
+  const out = new Set();
+  try {
+    for (const r of loadReplacementStore().replacements || []) {
+      const from = String((r && r.from) || '').trim().toLowerCase();
+      if (/^\[[^[\]|:]+\]$/.test(from)) out.add(from);
+    }
+  } catch {}
+  return out;
+}
+
 function loadWfStore() {
   let store = { enabled: [], mappings: {}, labels: {}, fieldConfigs: {}, shortcuts: {} };
   try { store = Object.assign(store, JSON.parse(fs.readFileSync(WF_STORE_PATH, 'utf8'))); } catch {}
@@ -2631,6 +2694,11 @@ runTests();
 
   // API: list directory
   if (pn === '/api/list' && req.method === 'GET') {
+    // Which bracketed tokens this install actually replaces, for the tag on the
+    // thumbnails. Read per listing rather than cached: the rules live in a file
+    // that any device can rewrite, and a listing is already doing far more work
+    // than a small JSON read.
+    const liveKeywords = keywordSetFromRules();
     const rawDir = url.searchParams.get('dir');
     const dir = (rawDir && rawDir.trim()) ? path.resolve(decodeURIComponent(rawDir)) : ROOT;
     // scope=all searches across BOTH media roots at once (ComfyUI output + the
@@ -2725,6 +2793,10 @@ runTests();
           thumb: !!thumbInfo,
           workflow: !!(idxRec && idxRec.w),
           nsfw: !!(idxRec && idxRec.n),
+          // Only the ones this install has a rule for: a bracketed token nobody
+          // replaces is not a template, it is a word in brackets, and it would
+          // be dropped before the run rather than resolved.
+          keywords: (idxRec && idxRec.k || []).filter(t => liveKeywords.has(t)),
         });
       }
     }

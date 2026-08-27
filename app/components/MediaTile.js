@@ -41,7 +41,16 @@ export default {
       return it.isVideo ? 'var(--video)' : it.isImage ? 'var(--image)'
         : it.isAudio ? 'var(--audio)' : 'var(--text3)';
     });
-    return { canRemix, ext, extColor, thumbUrl };
+    // The [keyword]s this file's embedded workflow still holds, already narrowed
+    // by the server to the ones this install has a rule for.
+    const hasKw = computed(() => !!(props.item.keywords || []).length);
+    const kwTitle = computed(() => {
+      const k = props.item.keywords || [];
+      if (!k.length) return '';
+      return 'Its workflow still holds ' + k.join(' ')
+        + ' — remixing this file can start from the template rather than the prompt it resolved to';
+    });
+    return { canRemix, ext, extColor, thumbUrl, hasKw, kwTitle };
   },
   template: `
     <button class="card" :class="{ 'is-dir': item.isDir, 'is-selected': selected }" @click="$emit('open')">
@@ -59,8 +68,13 @@ export default {
         <!-- Both flags ride along on every listing already; the tile is where
              they are worth anything, since the alternative is opening the file
              to find out whether it carries a graph. -->
-        <span v-if="item.workflow || item.nsfw" class="card-tags">
+        <span v-if="item.workflow || item.nsfw || hasKw" class="card-tags">
           <span v-if="item.workflow" class="card-tag" title="Has an embedded workflow">wf</span>
+          <!-- The embedded workflow still holds the [keyword]s it was written
+               with — the rules only ever rewrite the graph that executes, so a
+               remix of this file can start from the template rather than from
+               the sentence it resolved to. -->
+          <span v-if="hasKw" class="card-tag kw" :title="kwTitle">[kw]</span>
           <span v-if="item.nsfw" class="card-tag nsfw" title="Prompt matched the content filter">18+</span>
         </span>
       </span>
