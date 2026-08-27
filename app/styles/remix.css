@@ -228,6 +228,13 @@ select.rmx-inp{cursor:pointer}
    — twelve jobs is a decision — but not the red of a warning: it is what the
    rules were set up to do. */
 .rmx-repl>summary .rmx-repl-jobs{color:#ff8f8f;font-weight:700}
+/* The same fact the other way round: rules that are switched on and are not
+   going to fire, because nothing this run rewrites contains their keyword. Left
+   in the summary's own muted grey rather than given a colour — it is the
+   absence of a multiplication, so nothing is about to cost anything — but not
+   dimmed further either, since it is the half of "3 active" that explains why
+   the count is not 6. The keywords are on its hover. */
+.rmx-repl>summary .rmx-repl-idle{font-weight:700;cursor:help}
 .rmx-repl-body{padding:2px 12px 12px}
 .rmx-repl-all{display:flex;align-items:center;gap:6px;font-size:12px;color:#8e8e93;margin-bottom:8px;cursor:pointer;user-select:none}
 .rmx-repl-all input,.rmx-repl-row input[type=checkbox]{width:16px;height:16px;accent-color:#0a84ff}
@@ -374,16 +381,6 @@ select.rmx-inp{cursor:pointer}
 .mb-cell.sel{border-color:#0a84ff;box-shadow:0 0 0 2px #0a84ff inset}
 .mb-tick{position:absolute;top:5px;left:5px;width:19px;height:19px;accent-color:#0a84ff;cursor:pointer;z-index:3;margin:0}
 .mb-selbar{display:flex;align-items:center;gap:10px;padding:9px 12px;border-top:1px solid #2c2c2e;font-size:12.5px;flex:none}
-/* The same fact the other way round: rules that are set and are not going to
-   fire, because this prompt does not contain their keyword. Muted, not red —
-   it is the absence of a multiplication, so nothing is about to cost anything.
-   It is here at all so the x6 that stopped appearing has somewhere to say why. */
-.rmx-varidle{
-  margin:0 0 10px;padding:8px 11px;border-radius:8px;
-  border:1px solid #48484a;background:#ffffff08;color:#8e8e93;
-  font-size:12px;line-height:1.5;
-}
-.rmx-varidle b{color:#c7c7cc}
 .rmx-warn{margin:-6px 0 12px;padding:8px 10px;border:1px solid #ff9f0a55;background:#ff9f0a14;color:#ffb340;border-radius:7px;font-size:12px;line-height:1.5}
 .rmx-pchoice{max-width:780px}
 .rmx-pchoice-body{display:flex;gap:12px;padding:14px;overflow:auto;flex:1;min-height:0}

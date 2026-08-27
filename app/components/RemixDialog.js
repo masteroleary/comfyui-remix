@@ -1509,8 +1509,6 @@ export default {
       wfLib.busy = false;
     }
 
-    const andList = names => (names.length === 1 ? names[0]
-      : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1]);
     // Every text field this run will rewrite. The rules panel is judged against
     // the same string, or its tabs are not the jobs the button queues.
     const replScope = computed(() => replaceableText(cfg.fields));
@@ -1524,23 +1522,19 @@ export default {
     // ×6 for a workflow whose prompt mentions none of the keywords, and the run
     // agreed with it: six identical jobs.
     const runVariations = computed(() => keptVariations(replScope.value).length);
-    // The other half of the same question. A keyword with two rules that this
-    // prompt never mentions used to be the reason for a ×2 nobody asked for;
-    // now it is the reason for a ×2 not appearing, and silence about that is how
-    // "why did it stop running six of them?" happens. Quiet rather than red —
-    // nothing here is about to cost anything.
-    const idleVariations = computed(() => {
-      const names = replacementGroups(replaceableText(cfg.fields))
-        .filter(g => !g.live && g.rules.length > 1).map(g => g.label);
-      return names.length ? andList(names) : '';
-    });
+    // The other half of the same question — rules that are set and cannot fire
+    // — is stated by the replacements panel itself, as "N ignored" beside the
+    // count of the ones that can. It was a paragraph here, above the Remix
+    // button, which put it on the Run tab of one host while the panel on the
+    // line below carried on counting those same rules as active. One number
+    // beside the number it corrects beats two lines disagreeing.
 
     // The prompt the rules will rewrite, for the editor to preview.
     const promptFieldText = computed(() => {
       const f = (cfg.fields || []).find(x => x.kind === 'prompt' && x.enabled && !x.variant);
       return f && f.value != null ? String(f.value) : '';
     });
-    return { promptFieldText, replScope, promptChoice, pickWorkflow, resolvePromptChoice, runVariations, idleVariations,
+    return { promptFieldText, replScope, promptChoice, pickWorkflow, resolvePromptChoice, runVariations,
       store, src, tab, runCount, batchCount, workflows, wf, wfGroups, cfg, selectedPreset, scSaving, scSaved, canShortcut, shortcutHint, saveShortcut, deleteShortcut, isShortcut, currentWfLabel, currentWfShort,
       canUpdateWf, wfUpdating, wfUpdated, updateWorkflow, meta, job, isVideo, mediaUrl, toolsMenu, toolItem, remix, cancelJob, close, saveMsg, nodeFilter, saveLog, filteredNodes, nodeInputs,
       nodeEdits, editVal, setEdit,
@@ -1650,10 +1644,6 @@ export default {
           <!-- Run tab: run count, remix, status, log, output thumbnails, and the
                replacement rules under all of it -->
           <div class="rmx-runsec" v-show="tab==='run'">
-            <div v-if="idleVariations" class="rmx-varidle">
-              Variations for <b>{{ idleVariations }}</b> are set, but this prompt doesn't use
-              {{ idleVariations.indexOf(' and ') < 0 ? 'it' : 'them' }} — so they don't multiply the run.
-            </div>
             <div class="rmx-run">
               <select class="rmx-inp" v-model="runCount" style="width:70px" title="Number of runs"><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option><option value="5">5×</option><option value="10">10×</option><option value="20">20×</option></select>
               <button v-if="!job || job.status!=='running'" class="rmx-btn go" @click="remix" :disabled="!wf">▶ Remix</button>

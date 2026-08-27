@@ -252,8 +252,8 @@ Several things about it are load-bearing:
   stays the order the rules were typed — which is the order they run in within
   each phase below — because a free-text rule can rewrite what an earlier one
   produced. The panel's own summary states the multiplication — *Prompt
-  Replacements — 9 active, 12 jobs total* — since finding it out at job 48 is
-  the failure that number exists to prevent. It is on the summary rather than in
+  Replacements — 9 active, 3 ignored, 12 jobs total* — since finding it out at
+  job 48 is the failure that number exists to prevent. It is on the summary rather than in
   a red block on the Run tab because the summary is the line that is legible
   with the panel shut, and the panel is the control that decides it: the tabs
   directly under it are those twelve prompts, and unticking them is how the
@@ -284,9 +284,19 @@ Several things about it are load-bearing:
   against is `replaceableText(cfg.fields)` in WorkflowFields: every text field
   the form holds, hidden ones included (they still carry their value into the
   graph) and everything `applyReplacementsToNodes` skips left out, through the
-  same exported `SKIP_KEY`. Rules that are set and cannot fire get a quiet line
-  under the red one rather than silence, or the multiplication that stopped
-  appearing has nowhere to say why.
+  same exported `SKIP_KEY`. Rules that are set and cannot fire are counted on
+  the summary as **ignored**, beside the active count rather than in a paragraph
+  above the Remix button. That paragraph named the keywords, but it sat on the
+  Run tab — one host, one tab — while the summary on the line below went on
+  counting those same rules as active, so the two lines disagreed about the same
+  rules. Now the one number that says a rule will not fire is next to the number
+  that would otherwise claim it will, the keywords are on its hover, and the
+  row's colour dot is dimmed the way a switched-off row's is. Every unreachable
+  row counts, not just the ones with several answers: the old note was
+  explaining a missing multiplication, this is explaining a rule that replaces
+  nothing, and a solo one replaces exactly as little. A blank scope reads as
+  live rather than as ignored — that is a form that has not loaded, not a prompt
+  with nothing in it.
 - **A row is a keyword; its answers are a tick list.** The stored list is still
   one rule per keyword-and-value pair — that is what makes several answers to one
   keyword the variations a run fans out over — but the editor above it no longer

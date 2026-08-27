@@ -389,11 +389,45 @@ export default {
       const at = row => (order.has(row.key) ? order.get(row.key) : Infinity);
       return list.sort((a, b) => at(a) - at(b) || a.first - b.first);
     });
-    // How many rows are going to do something — the number on the summary. Rows,
-    // not rules: a keyword with four answers is one thing switched on, and four
-    // would be counting its answers twice over, once here and once in the job
-    // total beside it.
-    const activeRows = computed(() => rows.value.filter(rowLive).length);
+    // ── Active, and ignored ─────────────────────────────────────────────
+    // Two numbers, because "switched on" and "going to do something" are not
+    // the same thing and the difference is the one worth knowing: a rule for a
+    // keyword this prompt never says is set, is enabled, and replaces nothing.
+    // It used to be a paragraph above the Remix button naming the keywords —
+    // which put the answer on the Run tab, one host only, and left the summary
+    // claiming those rules as active. The count belongs beside the count it
+    // contradicts.
+    //
+    // Rows, not rules, on both sides: a keyword with four answers is one thing
+    // switched on, and four would be counting its answers twice over, once here
+    // and once in the job total beside it.
+    //
+    // Every unreachable row counts, not just the ones with several answers. The
+    // old note only named those, because it was explaining a missing
+    // multiplication; this is explaining a rule that will not fire, and a solo
+    // one fires exactly as little.
+    //
+    // A blank scope means the form has not loaded yet rather than that nothing
+    // is reachable — reachableRules says the same about a non-string — so
+    // everything reads as live until there is text to judge against, or a
+    // dialog would open saying every rule it has is ignored.
+    const liveKeys = computed(() => {
+      if (!scopeText.value.trim()) return null;
+      return new Set(replacementGroups(scopeText.value).filter(g => g.live).map(g => g.key));
+    });
+    const rowReaches = row => !liveKeys.value || liveKeys.value.has(foldTok(row.from));
+    const activeRows = computed(() => rows.value.filter(r => rowLive(r) && rowReaches(r)).length);
+    const idleRows = computed(() => rows.value.filter(r => rowLive(r) && !rowReaches(r)));
+    // The count says how many; the hover says which, since a number alone sends
+    // you down the rows guessing. Their dots are dimmed for the same reason.
+    const idleTitle = computed(() => {
+      const names = idleRows.value.map(r => String(r.from).trim());
+      const list = names.length === 1 ? names[0]
+        : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+      return names.length === 1
+        ? 'A rule for ' + list + ' is set, but this prompt doesn’t use it — so it replaces nothing and doesn’t multiply the run.'
+        : 'Rules for ' + list + ' are set, but this prompt doesn’t use them — so they replace nothing and don’t multiply the run.';
+    });
 
     // ── What a tab is ───────────────────────────────────────────────────
     // The titles a combination picked — the prompt each [keyword] resolved to —
@@ -485,17 +519,25 @@ export default {
         ? 'Something has to run — this is the last one ticked'
         : 'Untick to leave this prompt out of the run')
       : 'Not going to run. Tick to put it back.');
-    // Three states, not two. rowLive is false for a row that is switched off AND
+    // Four states, not two. rowLive is false for a row that is switched off AND
     // for one with nothing typed in it yet — telling someone their brand new
     // empty row to switch it on answers a question they did not ask, and points
-    // at a checkbox that is already ticked.
-    const dotTitle = row => (rowLive(row)
-      ? 'This row’s colour in the preview below'
-      : String(row.from).trim()
-        ? 'Switched on, this row’s colour in the preview below'
-        : 'This row’s colour, once it has something to find');
+    // at a checkbox that is already ticked. The fourth is the row the summary
+    // counts as ignored: on, filled in, and nothing in this prompt for it to
+    // find, which is why its colour is not in the paragraph below either.
+    const dotTitle = (row) => {
+      if (!rowLive(row)) {
+        return String(row.from).trim()
+          ? 'Switched on, this row’s colour in the preview below'
+          : 'This row’s colour, once it has something to find';
+      }
+      return rowReaches(row)
+        ? 'This row’s colour in the preview below'
+        : 'Ignored — this prompt doesn’t contain ' + String(row.from).trim();
+    };
     return {
       finalPrompt, replacements, saveReplacements, replAllOn, activeRows, promptLib,
+      idleRows, idleTitle, rowReaches,
       rows, rowColor, rowLive, dotTitle, colorAt, ruleColor,
       addRepl, delRow, setFrom, toggleRow, swapRow, toggleReplAll,
       menuFor, openMenu, closeMenu, menuList, chooseKeyword, ruleFor, onFindEsc,
@@ -510,8 +552,14 @@ export default {
            prompt, and the number is the whole of what the red block on the Run
            tab used to say. Closed, it is the only thing that says the run is
            about to cost twelve of something — which is why it is on the line you
-           can read without opening anything. -->
-      <summary>Prompt Replacements<span class="rmx-repl-on" v-if="activeRows"> — {{ activeRows }} active</span><span class="rmx-mut" v-else-if="rows.length"> — {{ rows.length }} off</span><span class="rmx-repl-jobs" v-if="variations.length > 1">, {{ keptCount }} job{{ keptCount === 1 ? '' : 's' }} total</span></summary>
+           can read without opening anything.
+           And beside it the rules that are switched on and cannot fire, which
+           was a paragraph above the Remix button until it was noticed that it
+           belonged next to the number it was correcting: "3 active" counted
+           them as active. Muted, not red — an ignored rule is the absence of a
+           multiplication, so nothing is about to cost anything — with the
+           keywords themselves on the hover. -->
+      <summary>Prompt Replacements<span class="rmx-repl-on" v-if="activeRows"> — {{ activeRows }} active</span><span class="rmx-mut" v-else-if="rows.length && !idleRows.length"> — {{ rows.length }} off</span><span class="rmx-repl-idle" v-if="idleRows.length" :title="idleTitle">{{ activeRows ? ', ' : ' — ' }}{{ idleRows.length }} ignored</span><span class="rmx-repl-jobs" v-if="variations.length > 1">, {{ keptCount }} job{{ keptCount === 1 ? '' : 's' }} total</span></summary>
       <div class="rmx-repl-body">
         <div class="rmx-mut" style="font-size:12px;margin-bottom:8px">
           Applied to the prompt right before each run (case-insensitive, all matches).
@@ -528,7 +576,7 @@ export default {
           <div class="rmx-repl-list">
             <label class="rmx-repl-all"><input type="checkbox" :checked="replAllOn" @change="toggleReplAll"> Toggle all on/off</label>
             <div v-for="row in rows" :key="row.id" class="rmx-repl-row">
-              <span class="rmx-repl-dot" :class="{off: !rowLive(row)}" :style="{ background: rowColor(row) }"
+              <span class="rmx-repl-dot" :class="{off: !rowLive(row) || !rowReaches(row)}" :style="{ background: rowColor(row) }"
                     :title="dotTitle(row)"></span>
               <input type="checkbox" :checked="row.on" @change="toggleRow(row)" title="Enable this row">
               <span class="rmx-repl-find">
