@@ -66,10 +66,13 @@ usually the same bug: something the host provided instead of the component.
   owns the media picker and the LoRA library it needs (that is why an image
   field has 🖼 Browse wherever it is mounted), and it owns no state: `cfg.fields`
   are reactive objects the controls write straight into, and the host reads them
-  back when it builds a run. The host contributes only its own extras, through
-  the slot: the inspect page puts the replacement rules there, above the prompt
-  they rewrite. The dialog does not — it has a Run tab, and the rules belong at
-  the top of it, beside the button that queues what they produce.
+  back when it builds a run. It has **no slot**: it used to, so the inspect page
+  could put the replacement rules directly above the prompt they rewrite, from
+  when that page was one page with nothing else to put them on. It has had a Run
+  tab for a while, and the rules belong at the foot of it in both hosts — beside
+  the button that queues what they produce, not on the tab that only states what
+  a run will be. So the form renders the fields and nothing else, which is one
+  fewer thing a host can arrange differently.
   It also owns the rule that **the seed box states what will be used, or
   nothing**. An unpinned seed is not sent — `collectFieldValues` drops it — and
   `launchJob` re-randomises every seed input in the built graph, so a number in
@@ -188,9 +191,13 @@ surface did nothing to a run started from it.
 ### Prompt replacements
 
 The rules are a shared list in `app/replacements.js`; `ReplacementRules.js` is
-the editor both hosts mount — the inspect page through the form's slot, the
-dialog at the top of its Run tab, where the tabs below say what the button is
-about to queue. The list and the editor are deliberately different shapes: the
+the editor both hosts mount, in the same place: the **foot of the Run tab**,
+under everything else that tab has to show, where its summary states what the
+button above is about to queue. The inspect page mounted it on its Workflow tab
+instead, through a slot in the form — the arrangement it was given before it had
+a Run tab, kept long after it grew one, which put the control that decides how
+many runs there are on the tab that only describes one of them. The slot is gone
+with it. The list and the editor are deliberately different shapes: the
 list is one rule per keyword-and-value pair, the editor is one row per keyword.
 Several things about it are load-bearing:
 

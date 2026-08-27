@@ -225,32 +225,6 @@ html.auth-on .inspect .top-bar-row{padding-right:88px}
 .inspect .fields-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center}
 .inspect .fields-msg{font-size:12px;color:var(--text2)}
 
-/* ── Prompt replacements ──────────────────────────────────────────────────── */
-.inspect .replace-box{margin:8px 0;background:var(--surface);border:1px solid var(--border);border-radius:8px}
-.inspect .replace-box summary{cursor:pointer;padding:9px 12px;font-size:12px;user-select:none;color:var(--text2)}
-.inspect .replace-box summary .cap{text-transform:uppercase;letter-spacing:.5px}
-.inspect .replace-body{padding:2px 12px 12px}
-.inspect .replace-help{font-size:12px;color:var(--text2);margin-bottom:8px}
-.inspect .replace-all{
-  display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);
-  margin-bottom:8px;cursor:pointer;user-select:none;
-}
-.inspect .replace-all input{width:16px;height:16px;flex:none;accent-color:var(--accent)}
-.inspect .replace-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
-.inspect .replace-row>input[type=checkbox]{width:16px;height:16px;flex:none;accent-color:var(--accent)}
-.inspect .replace-cell{position:relative;flex:1;min-width:0}
-.inspect .replace-cell input{
-  width:100%;background:#111;color:var(--text);border:1px solid #48484a;
-  border-radius:6px;padding:6px 24px 6px 8px;font-size:12px;font-family:inherit;
-}
-.inspect .replace-clear{
-  position:absolute;right:1px;top:50%;transform:translateY(-50%);background:none;border:none;
-  color:var(--text2);font-size:12px;cursor:pointer;padding:3px 6px;
-}
-.inspect .btn-swap{flex:none;padding:5px 8px;font-size:14px;background:var(--surface2);color:var(--accent)}
-.inspect .btn-repl-act{flex:none;width:32px;padding:6px 0;font-size:12px;justify-content:center;background:#3a1e1e;color:#e06c6c}
-.inspect .btn-repl-act.dirty{background:#2d5a1e;color:#a8e06c}
-
 /* ── Execution panel ──────────────────────────────────────────────────────── */
 .inspect .exec-panel{margin:12px 0;display:none}
 .inspect .exec-panel.vis{display:block}

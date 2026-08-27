@@ -1617,10 +1617,11 @@ export default {
             </div>
             <div v-else-if="cfg.error" class="rmx-mut">Couldn’t load fields: {{ cfg.error }}</div>
             <div v-else>
-              <!-- Nothing in the form's slot here any more: the replacement
-                   rules sit at the top of the Run tab instead. The inspect page
-                   still fills it — it is one page, with no second tab to move
-                   them to. -->
+              <!-- The form has no slot to fill any more. The replacement rules
+                   sit at the foot of the Run tab, here and on the inspect page
+                   both — that page kept them above the prompt long after it
+                   grew a Run tab of its own, which is exactly the drift this
+                   shared component exists to prevent. -->
               <workflow-fields :cfg="cfg" :preset="selectedPreset" @update:preset="selectedPreset = $event"></workflow-fields>
             </div>
             <details class="rmx-hidden" v-if="meta.embedded" style="margin-top:12px">

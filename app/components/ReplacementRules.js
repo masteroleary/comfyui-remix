@@ -60,9 +60,9 @@ const ruleColor = i => RULE_COLORS[((i % RULE_COLORS.length) + RULE_COLORS.lengt
 export default {
   name: 'ReplacementRules',
   props: {
-    // The prompt as it stands in the form. Given, not injected: this renders in
-    // the host's slot, so its component parent is the host rather than the form
-    // that owns the field.
+    // The prompt as it stands in the form. Given, not injected: this is mounted
+    // by the host, beside the form rather than inside it, so its component
+    // parent is the host rather than the form that owns the field.
     prompt: { type: String, default: '' },
     // Every text field the run will rewrite, not just the one being previewed —
     // `replaceableText(cfg.fields)` in both hosts, which is the exact text the

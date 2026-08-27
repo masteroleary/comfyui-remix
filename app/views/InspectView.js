@@ -1044,12 +1044,15 @@ export default {
 
 
       <!-- The form the workflow declares, rendered by the component the Remix
-           dialog uses. The page contributes only its replacement rules, through
-           the slot — those are per-surface state, not part of the form. -->
+           dialog uses, and mounted the way the dialog mounts it: the tag and
+           nothing else. The replacement rules used to be its child, put through
+           a slot directly above the prompt they rewrite, from when this page was
+           one page with no Run tab to move them to. It has had one for a while,
+           so they are at the foot of that instead — same component, same props,
+           same place as the dialog — and the tab that states what a run will be
+           no longer also carries the control deciding how many runs there are. -->
       <workflow-fields v-if="fieldConfig" :cfg="fieldConfig"
-                       :preset="selectedPreset" @update:preset="selectedPreset = $event">
-        <replacement-rules :prompt="promptFieldText" :scope="replScope"></replacement-rules>
-      </workflow-fields>
+                       :preset="selectedPreset" @update:preset="selectedPreset = $event"></workflow-fields>
       <div v-else-if="showRun" class="fc-empty">
         Nothing detected in this workflow, so there is nothing to set. ↻ Refresh detection re-reads the file.
       </div>
@@ -1188,6 +1191,12 @@ export default {
                      @toggle="toggleOutput(t)" @open="openOutput(t)" @remix="remixOutput(t)" />
         </div>
       </div>
+
+      <!-- Last, under everything the tab has to show — the same component in the
+           same place as the dialog’s Run tab. Folded shut, its summary is the
+           line that says ▶ Run is about to queue twelve of something; open, its
+           tabs are where twelve becomes the five that were wanted. -->
+      <replacement-rules :prompt="promptFieldText" :scope="replScope"></replacement-rules>
     </div>
   </div>
 

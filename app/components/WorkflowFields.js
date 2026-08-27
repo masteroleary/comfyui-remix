@@ -357,15 +357,11 @@ export default {
       .map(f => f.label + '  →  node ' + ((f.targets || [])[0] || {}).nodeId).join(String.fromCharCode(10)));
     const hiddenFields = computed(() => fields.value.filter(f => !f.enabled && !f.unreachable).slice().sort(loraLast));
     const isWide = f => WIDE.has(f.kind);
-    // Where the host slot goes: directly above the first block holding a prompt,
-    // because what the host puts there is the replacement rules that rewrite it.
-    // A slot can only render once, so these are exclusive by v-if.
-    const promptAt = computed(() => {
-      const isP = f => f.kind === 'prompt' || f.kind === 'negative_prompt';
-      if (nodeGroups.value.loose.some(isP)) return 'loose';
-      const g = nodeGroups.value.titled.find(x => x.fields.some(isP));
-      return g ? g.key : 'top';
-    });
+    // There is no host slot any more. It existed to put the replacement rules
+    // directly above the first block holding a prompt — the inspect page's
+    // arrangement, from when that page had no Run tab. Both hosts now mount the
+    // rules at the foot of their Run tab, so the form renders the fields and
+    // nothing else, which is one fewer way for the two hosts to differ.
 
     // ── Match Input Image ───────────────────────────────────────────────
     // A workflow that takes an image and also states a frame size is stating it
@@ -648,13 +644,11 @@ export default {
     const loraHigh = computed(() => enabledLoras.value.filter(f => f.variant === 'high'));
     const loraLow = computed(() => enabledLoras.value.filter(f => f.variant === 'low'));
     const loraOther = computed(() => enabledLoras.value.filter(f => f.variant !== 'high' && f.variant !== 'low'));
-    return { picker, onPick, promptAt, enabledFields, hiddenFields, deadFields, deadNote, deadTitle, isWide, nodeGroups, enabledLoras, loraHigh, loraLow, loraOther,
+    return { picker, onPick, enabledFields, hiddenFields, deadFields, deadNote, deadTitle, isWide, nodeGroups, enabledLoras, loraHigh, loraLow, loraOther,
       matchAt, matchBatch, LORA_FAMILIES, family, detectedFamily, toggleFamily };
   },
   template: `
     <div class="rmx-fields">
-      <slot v-if="promptAt === 'top'"></slot>
-      <slot v-if="promptAt === 'loose'"></slot>
       <div v-if="nodeGroups.loose.length" class="rmx-grid">
         <div v-for="f in nodeGroups.loose" :key="f.id" class="rmx-field" :class="{wide: isWide(f)}">
           <prompt-switch :field="f" :alt="cfg.promptAlt"></prompt-switch>
@@ -664,7 +658,6 @@ export default {
       </div>
       <match-input v-if="matchAt === 'loose'" :cfg="cfg" :batch="matchBatch"></match-input>
       <template v-for="g in nodeGroups.titled" :key="g.key">
-      <slot v-if="promptAt === g.key"></slot>
       <div class="rmx-nodegroup">
         <div class="rmx-nodegroup-title">{{ g.title }}</div>
         <div class="rmx-grid">
