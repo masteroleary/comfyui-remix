@@ -318,7 +318,44 @@ export default {
   setup(props) {
     const fields = computed(() => props.cfg.fields || []);
     const enabledFields = computed(() => fields.value.filter(f => f.enabled).slice().sort(loraLast));
-    const hiddenFields = computed(() => fields.value.filter(f => !f.enabled).slice().sort(loraLast));
+    // ── Hidden, and dead ────────────────────────────────────────────────
+    // Detection already knows which fields cannot do anything, and it knows it
+    // three ways: a widget wired from another node never becomes a field at all
+    // (widgetFree), a muted or bypassed node marks its fields `inactive`, and a
+    // field whose every target sits outside the output-reachable graph is
+    // `unreachable`. All three are demoted — never auto-enabled, confidence cut,
+    // forced off if a stale saved edit had them on — but the last two still sat
+    // in this list with a tick box beside them, which offers them as something to
+    // turn on. Ticking one renders a control that changes nothing, and the only
+    // thing that ever said so was a warning in the job log after the run.
+    //
+    // `unreachable` is structural: the node is not on the path to an output, so
+    // the value cannot reach the render however the form is filled in. Those are
+    // dropped. Rewire the workflow and detection runs again and they come back.
+    //
+    // `inactive` is not structural, it is state — a mute you can lift, and one a
+    // style preset lifts on its own at run time. Those stay listed, tagged, since
+    // hiding a field that the preset you are about to pick will bring to life is
+    // a worse failure than listing one that is asleep.
+    const deadFields = computed(() => fields.value.filter(f => !f.enabled && f.unreachable));
+    // Named by kind rather than by label. Five orphaned prompt nodes carry five
+    // copies of the same generated label — "Prompt — 正面提示詞 (positive) (正面提示詞
+    // (positive))", five times — which is a wall of text saying one thing. What
+    // is worth knowing is what kind of control went missing.
+    const deadNote = computed(() => {
+      const n = deadFields.value.length;
+      if (!n) return '';
+      const kinds = [...new Set(deadFields.value.map(f => String(f.kind || 'field').replace(/_/g, ' ')))];
+      const word = n === 1 ? 'field' : 'fields';
+      if (kinds.length === 1) return n + ' ' + kinds[0] + ' ' + word;
+      const list = kinds.length === 2 ? kinds.join(' and ')
+        : kinds.slice(0, -1).join(', ') + ' and ' + kinds[kinds.length - 1];
+      return n + ' ' + word + ' (' + list + ')';
+    });
+    // The full list is on the hover, where a long one costs nothing.
+    const deadTitle = computed(() => deadFields.value
+      .map(f => f.label + '  →  node ' + ((f.targets || [])[0] || {}).nodeId).join(String.fromCharCode(10)));
+    const hiddenFields = computed(() => fields.value.filter(f => !f.enabled && !f.unreachable).slice().sort(loraLast));
     const isWide = f => WIDE.has(f.kind);
     // Where the host slot goes: directly above the first block holding a prompt,
     // because what the host puts there is the replacement rules that rewrite it.
@@ -611,7 +648,7 @@ export default {
     const loraHigh = computed(() => enabledLoras.value.filter(f => f.variant === 'high'));
     const loraLow = computed(() => enabledLoras.value.filter(f => f.variant === 'low'));
     const loraOther = computed(() => enabledLoras.value.filter(f => f.variant !== 'high' && f.variant !== 'low'));
-    return { picker, onPick, promptAt, enabledFields, hiddenFields, isWide, nodeGroups, enabledLoras, loraHigh, loraLow, loraOther,
+    return { picker, onPick, promptAt, enabledFields, hiddenFields, deadFields, deadNote, deadTitle, isWide, nodeGroups, enabledLoras, loraHigh, loraLow, loraOther,
       matchAt, matchBatch, LORA_FAMILIES, family, detectedFamily, toggleFamily };
   },
   template: `
@@ -672,8 +709,15 @@ export default {
         <select class="rmx-inp" :value="preset" @change="$emit('update:preset', $event.target.value)"><option value="">— none —</option><option v-for="p in (cfg.presets || [])" :key="p.title" :value="p.title">{{ p.title }}</option></select>
       </div>
       <details class="rmx-hidden" v-if="hiddenFields.length"><summary>{{ hiddenFields.length }} hidden field{{ hiddenFields.length===1?'':'s' }}</summary>
-        <div class="rmx-field" v-for="f in hiddenFields" :key="f.id"><label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" @change="f.enabled=true" title="Show field"> {{ f.label }} <span class="rmx-mut" style="text-transform:none">· {{ f.kind }}</span></label><field-control :field="f"></field-control></div>
+        <div class="rmx-field" v-for="f in hiddenFields" :key="f.id"><label class="rmx-lbl"><input type="checkbox" class="rmx-tgl" @change="f.enabled=true" title="Show field"> {{ f.label }} <span class="rmx-mut" style="text-transform:none">· {{ f.kind }}</span> <span v-if="f.inactive" class="rmx-dead-tag" title="Its node is muted or bypassed — nothing it holds reaches the render until that changes, or a style preset lifts the mute">muted</span></label><field-control :field="f"></field-control></div>
       </details>
+      <!-- Not offered, and not silent about it: a control that cannot reach the
+           render is worse than a missing one, but a missing one with no
+           explanation is how "where did the second prompt box go" happens. -->
+      <div v-if="deadNote" class="rmx-dead-note" :title="deadTitle">
+        <b>{{ deadNote }}</b> in this workflow {{ deadFields.length === 1 ? 'targets a node' : 'target nodes' }} outside the executing graph, so {{ deadFields.length === 1 ? 'it is' : 'they are' }}
+        not offered — nothing typed in {{ deadFields.length === 1 ? 'it' : 'them' }} would reach the render. Rewire the workflow and they come back.
+      </div>
     </div>
     <!-- The gallery an image/video/audio field opens. It lives with the form
          because the field is what raises it — a host only has to mount this. -->

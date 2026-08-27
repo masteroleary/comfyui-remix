@@ -70,6 +70,35 @@ usually the same bug: something the host provided instead of the component.
   the slot: the inspect page puts the replacement rules there, above the prompt
   they rewrite. The dialog does not — it has a Run tab, and the rules belong at
   the top of it, beside the button that queues what they produce.
+  It also owns the rule that **the seed box states what will be used, or
+  nothing**. An unpinned seed is not sent — `collectFieldValues` drops it — and
+  `launchJob` re-randomises every seed input in the built graph, so a number in
+  an unpinned box is inert. It used to hold one anyway, because most workflows
+  store a concrete seed and the load prefilled the opened file's over the top:
+  the box showed a plausible number that never changed while every run used a
+  fresh one. Now the box is cleared unless it is pinned, the placeholder reads
+  *random*, and the file's own seed goes on `_mediaSeed` behind the
+  **↺ this file's seed** button — which only appears when the box is empty and
+  pins what it puts there. Two exceptions: a shortcut keeps its seed and comes
+  back pinned, since `collectFieldValues` only ever stored one that was pinned
+  when it was saved; and Inherit's seed is the file's own, so it is captured for
+  the button before the box is cleared. `prefillFromEmbedded` already worked this
+  way — the load now agrees with it.
+  It also owns **which fields are worth offering at all**. Detection already
+  knows three ways that a control cannot reach the render: a widget wired from
+  another node never becomes a field (`widgetFree`), a muted or bypassed node
+  marks its fields `inactive`, and a field whose every target sits outside the
+  output-reachable graph is `unreachable`. All three were already demoted — never
+  auto-enabled, confidence cut, forced off if a stale saved edit had them on —
+  but the last two still sat in the hidden-fields list with a tick box, which
+  offers them as something to turn on; ticking one renders a control that changes
+  nothing, and the only thing that ever said so was a line in the job log after
+  the run. The `unreachable` ones are now dropped from that list, with a quiet
+  note naming what went and why (rewire the workflow and detection brings them
+  back). `inactive` ones stay, tagged: that is a mute, which is state rather than
+  structure, and a style preset lifts mutes at run time — hiding a field the
+  preset you are about to pick will bring to life is a worse failure than listing
+  one that is asleep.
   It also owns **Keyword Prompt | Remix Prompt**, the switch above the prompt
   field. A file ComfyUI wrote holds this prompt twice — the `prompt` chunk it
   executed, and the `workflow` chunk the client sent as pnginfo, which is the

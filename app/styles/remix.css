@@ -342,6 +342,21 @@ select.rmx-inp{cursor:pointer}
 .rmx-lora-cols{display:flex;gap:16px;margin-top:6px}
 .rmx-lora-col{flex:1;min-width:0}
 @media (max-width:640px){.rmx-lora-cols{flex-direction:column;gap:8px}}
+/* A field whose node is muted: still offered, because a mute is a state and a
+   style preset can lift it, but never silently. */
+.rmx-dead-tag{
+  font-size:10px;line-height:1;padding:2px 6px;border-radius:999px;vertical-align:1px;
+  background:#3a2a12;color:#ffb340;border:1px solid #5a4020;text-transform:none;letter-spacing:0;
+}
+/* The ones that are not offered at all, and why. Quiet: nothing here is about to
+   cost anything, it is an answer to a question you would otherwise have to ask
+   the graph. */
+.rmx-dead-note{
+  margin-top:8px;padding:8px 11px;border-radius:8px;
+  border:1px solid #48484a;background:#ffffff08;color:#8e8e93;
+  font-size:11.5px;line-height:1.5;
+}
+.rmx-dead-note b{color:#c7c7cc;font-weight:600}
 .rmx-nodegroup-title{font-size:10px;color:#7d7d82;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 5px;border-bottom:1px solid #2c2c2e;padding-bottom:3px}
 .rmx-picker-overlay{position:fixed;inset:0;z-index:3100;background:#000c;display:flex;align-items:center;justify-content:center;padding:24px}
 .rmx-picker{position:relative;background:#141416;border:1px solid #38383a;border-radius:14px;width:100%;max-width:1000px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden}

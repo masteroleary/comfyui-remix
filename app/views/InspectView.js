@@ -498,8 +498,18 @@ export default {
       if (!cfg || cfg.error || !Array.isArray(cfg.fields)) { fieldConfig.value = null; fieldCfgName.value = ''; return; }
       // A lora_rows control renders (and mutates) an array in place, so give it
       // one up front rather than patching f.value from inside the template.
+      const inheritNow = name === 'inherit';
       for (const f of cfg.fields) {
         if ((f.control && f.control.type) === 'lora_rows' && !Array.isArray(f.value)) f.value = [];
+        // Same rule as the dialog: a number in the seed box means that number
+        // will be used, and unpinned it never is — collectFieldValues skips it
+        // and the launch re-randomises the built graph. Inherit's config came
+        // from this file's own graph, so its seed is the file's; keep it for the
+        // ↺ button before clearing the box.
+        if (f.kind === 'seed') {
+          if (inheritNow && Number(f.value) >= 0 && String(f.value).trim() !== '') f._mediaSeed = Number(f.value);
+          f.value = ''; f._pin = false;
+        }
       }
       // Both versions of this file's prompt, for the switch above the field —
       // the text that ran, and the text as it was typed before the replacement
@@ -521,10 +531,12 @@ export default {
           const pf = fieldConfig.value.fields.find(f => f.kind === 'prompt' && !f.variant);
           if (pf) pf.value = p;
         }
+        // Behind the "↺ this file's seed" button rather than in the box — see
+        // the seed rule above.
         const s = extractImageSeed();
         if (s != null && Number(s) >= 0) {
           const sf = fieldConfig.value.fields.find(f => f.kind === 'seed');
-          if (sf) sf.value = s;
+          if (sf) sf._mediaSeed = s;
         }
         // The style preset is stated by the graph's mute state rather than by a
         // widget, so it has to be read off the file's own graph: Inherit's config

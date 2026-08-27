@@ -1124,7 +1124,35 @@ export default {
         else {
           cfg.error = ''; cfg.presets = c.presets || [];
           selectedPreset.value = c.selectedPreset || '';   // a shortcut restores the preset it captured
-          for (const f of c.fields) { if (f.kind === 'seed') { if (Number(f.value) < 0) f.value = ''; f._pin = false; } if (ctype(f) === 'lora_rows' && !Array.isArray(f.value)) f.value = []; if (ctype(f) === 'boolean') f.value = !!f.value; }
+          // ── The seed box says what will be used, or nothing ──────────
+          // A number in the box means that number will be the seed. Unpinned it
+          // never was: collectFieldValues skips an unpinned seed, and launchJob
+          // re-randomises every seed input in the built graph — so the workflow's
+          // stored number sat there looking like the seed of the next run while
+          // three consecutive runs used three other ones. Blank is what an
+          // unpinned seed actually is, and the placeholder already reads
+          // "random". The file's own seed is not lost: it goes on _mediaSeed,
+          // behind the "↺ this file's seed" button, which only appears once the
+          // box is empty and pins what it puts there.
+          const scNow = isShortcut(wf.value), inheritNow = wf.value === '__inherit__';
+          const hasSeed = f => Number(f.value) >= 0 && String(f.value).trim() !== '';
+          for (const f of c.fields) {
+            if (f.kind === 'seed') {
+              // Inherit's config was built from this file's own graph, so the
+              // seed in it is the one that made the file. A named workflow's is
+              // whatever the .json was last saved with — the media seed for
+              // those arrives below, out of the file's metadata.
+              if (inheritNow && hasSeed(f)) f._mediaSeed = Number(f.value);
+              // A shortcut carries a seed only if it was pinned when the
+              // shortcut was saved, since collectFieldValues drops an unpinned
+              // one. So a number here was put there on purpose — keep it, and
+              // pin it, rather than blanking what the shortcut was saved for.
+              if (scNow && hasSeed(f)) f._pin = true;
+              else { f.value = ''; f._pin = false; }
+            }
+            if (ctype(f) === 'lora_rows' && !Array.isArray(f.value)) f.value = [];
+            if (ctype(f) === 'boolean') f.value = !!f.value;
+          }
           // A named workflow opens on its stored defaults, so seed it from the
           // image's metadata. Inherit must NOT do that: its config was generated
           // from this image's own graph, so every value is already the one that
@@ -1143,15 +1171,15 @@ export default {
           cfg.promptAlt = promptAlternatives(meta.embedded, meta.embeddedWf);
           if (wf.value !== '__inherit__' && !isShortcut(wf.value)) {
             if (meta.prompt) { const pf = c.fields.find(f => f.kind === 'prompt' && !f.variant); if (pf) pf.value = meta.prompt; }
-            // The seed the media was actually made with. Only prefill it when the
-            // workflow carries a concrete seed of its own: a workflow set to -1 means
-            // "random every run" (cleared to blank just above), and dropping the last
-            // run's number in there reads as if the re-run were pinned to it — it isn't,
-            // an unpinned seed is re-randomised per run at launch. Keep it as the value
-            // behind the "this file's seed" button instead.
+            // The seed the media was actually made with — kept as the value behind
+            // the "↺ this file's seed" button and never dropped into the box. In
+            // the box it would read as if the re-run were pinned to it, and it
+            // isn't: an unpinned seed is re-randomised per run at launch. That is
+            // exactly what used to happen whenever the workflow carried a concrete
+            // seed of its own, which is most of them.
             if (meta.seed != null && meta.seed >= 0) {
               const sf = c.fields.find(f => f.kind === 'seed');
-              if (sf) { sf._mediaSeed = meta.seed; if (String(sf.value).trim() !== '') sf.value = meta.seed; }
+              if (sf) sf._mediaSeed = meta.seed;
             }
           }
           // When the source media carries this exact workflow, prefill every field
