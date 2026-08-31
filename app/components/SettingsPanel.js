@@ -15,6 +15,7 @@
 import { store, showToast } from '../store.js';
 import { api } from '../api.js';
 import FolderPicker from './FolderPicker.js';
+import { fmtNum, fmtBytes } from '../format.js';
 
 const { reactive, computed, watch, nextTick, ref, onBeforeUnmount } = window.Vue;
 
@@ -79,6 +80,18 @@ export default {
         placeholder: 'Choose a password',
       },
       picker: { open: false, target: '' },
+      // Restore from a backup folder. Three steps, and the middle one is the point:
+      // pick a folder, read back what is in it and what that would overwrite, then
+      // copy. Nothing is written until the list on screen has been looked at.
+      restore: {
+        root: '',        // the folder chosen, once it has been inspected
+        reading: false,
+        reason: '',      // why the folder was refused, if it was
+        stamps: [],      // dated folders inside it, when the folder above one was picked
+        parts: [],       // what was found, each with its measurement
+        pick: {},        // key -> ticked
+        job: null,       // the run, while it runs and after it finishes
+      },
     });
     const pwInput = ref(null);
     const tagInput = ref(null);
@@ -151,9 +164,17 @@ export default {
         : (k === 'comfyDir' && p.hasWorkflows === false ? '⚠ no workflows dir inside' : '✓');
       return { text, color: ok ? 'var(--green)' : 'var(--amber)' };
     }
+    // The picker is shared by the two path fields and by Restore, so the target is
+    // either a path key or the sentinel below. A key that is neither writes nowhere,
+    // which is what the guards in pickerSeed and picked are for.
+    const RESTORE_TARGET = '__restore';
     const browse = k => { s.picker.target = k; s.picker.open = true; };
-    const pickerSeed = computed(() => (s.picker.target && s.paths[s.picker.target] ? s.paths[s.picker.target].value : ''));
+    const pickerSeed = computed(() => {
+      if (s.picker.target === RESTORE_TARGET) return s.restore.root;
+      return s.picker.target && s.paths[s.picker.target] ? s.paths[s.picker.target].value : '';
+    });
     function picked(p) {
+      if (s.picker.target === RESTORE_TARGET) { restoreInspect(p); return; }
       if (s.picker.target && s.paths[s.picker.target]) s.paths[s.picker.target].value = p;
     }
 
@@ -240,6 +261,95 @@ export default {
       s.restarting = false;
       s.restartMsg = '';
       showToast('The server did not come back within 90s. Check restart.log in the app folder.', 9000);
+    }
+
+    // ── Restore from a backup ──
+    // Deliberately here rather than on the Clean page that writes the backups: that page
+    // is unavailable whenever its scheduled task is not registered, which is exactly the
+    // state of a machine that has just been rebuilt — the one you most want to restore
+    // onto. This needs no task, so it sits with the other server actions.
+    const restoreBusy = computed(() => !!(s.restore.job && s.restore.job.state === 'running'));
+
+    async function restoreInspect(p) {
+      s.restore.reading = true;
+      s.restore.reason = '';
+      s.restore.stamps = [];
+      s.restore.parts = [];
+      s.restore.job = null;
+      try {
+        const d = await api.restoreInspect(p);
+        s.restore.root = d.resolved || p;
+        if (!d.ok) {
+          s.restore.reason = d.reason || 'That does not look like a backup.';
+          s.restore.stamps = Array.isArray(d.stamps) ? d.stamps : [];
+        } else {
+          s.restore.parts = d.parts || [];
+          // Everything that has something in it starts ticked, except the settings.
+          // Those overwrite config.json — ports, paths, keys, the password hash — over a
+          // server that is running on it, so that one is a deliberate second decision
+          // rather than something that happens because a folder was picked.
+          const pick = {};
+          for (const part of s.restore.parts) pick[part.key] = !part.blocked && part.files > 0 && part.key !== 'config';
+          s.restore.pick = pick;
+        }
+      } catch (err) {
+        s.restore.reason = 'Could not read that folder: ' + err.message;
+      }
+      s.restore.reading = false;
+    }
+
+    const restorePicked = computed(() =>
+      s.restore.parts.filter(p => !p.blocked && p.files > 0 && s.restore.pick[p.key]));
+    const restoreTotals = computed(() => {
+      let files = 0, bytes = 0, existing = 0;
+      for (const p of restorePicked.value) { files += p.files || 0; bytes += p.bytes || 0; existing += p.existing || 0; }
+      return { files, bytes, existing };
+    });
+
+    // The run outlives the request, so this is what reports it. Stopped on unmount the
+    // same way the Clean page's poll is, and for the same reason: a poll already in
+    // flight would otherwise reschedule itself forever.
+    let restoreTimer = null, restoreStopped = false;
+    async function restorePoll() {
+      if (restoreStopped) return;
+      try {
+        const d = await api.restoreState();
+        s.restore.job = d.job || null;
+      } catch { /* a poll that fails is not worth a toast */ }
+      if (!restoreStopped && s.restore.job && s.restore.job.state === 'running') restoreTimer = setTimeout(restorePoll, 900);
+    }
+
+    async function runRestore() {
+      const picks = restorePicked.value;
+      if (!picks.length || restoreBusy.value) return;
+      const t = restoreTotals.value;
+      const cfg = picks.some(p => p.key === 'config');
+      const ok = window.confirm(
+        'Restore from\n  ' + s.restore.root + '\n\n'
+        + picks.map(p => '  • ' + p.label + ' → ' + p.to).join('\n')
+        + '\n\n' + fmtNum(t.files) + ' files, ' + fmtBytes(t.bytes)
+        + (t.existing ? '\n' + fmtNum(t.existing) + ' of them already exist and will be OVERWRITTEN.' : '')
+        + '\n\nNothing is deleted — files that are only at the destination are left alone.'
+        + (cfg ? '\n\nSettings are included: this overwrites config.json, so a different password in the backup will sign you out, and the port and media root need a restart to take effect.' : '')
+      );
+      if (!ok) return;
+      try {
+        await api.restore(s.restore.root, picks.map(p => p.key));
+        s.restore.job = { state: 'running', files: 0, bytes: 0, folder: '', log: '' };
+        restoreTimer = setTimeout(restorePoll, 500);
+      } catch (err) {
+        showToast('Restore refused: ' + err.message, 9000);
+      }
+    }
+
+    function restoreClear() {
+      if (restoreBusy.value) return;
+      clearTimeout(restoreTimer);
+      s.restore.root = '';
+      s.restore.parts = [];
+      s.restore.stamps = [];
+      s.restore.reason = '';
+      s.restore.job = null;
     }
 
     // ── Save ──
@@ -338,7 +448,11 @@ export default {
       close();
     }
     window.addEventListener('keydown', onKey);
-    onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
+    onBeforeUnmount(() => {
+      window.removeEventListener('keydown', onKey);
+      restoreStopped = true;
+      clearTimeout(restoreTimer);
+    });
 
     // In page mode the route names the section; in dialog mode the tab strip does.
     const curTab = computed(() => (props.page ? (props.only || 'config') : s.tab));
@@ -350,6 +464,8 @@ export default {
       nsfwSorted, addTag, removeTag,
       stored, usable, editing, minHint, authChange, authRemove, authTyped,
       save, close, restartServer,
+      RESTORE_TARGET, restoreBusy, restorePicked, restoreTotals,
+      restoreInspect, runRestore, restoreClear, fmtNum, fmtBytes,
     };
   },
   template: `
@@ -410,7 +526,88 @@ export default {
             <button class="set-btn" :disabled="s.restarting" @click="restartServer">
               {{ s.restarting ? 'Restarting…' : 'Restart server' }}
             </button>
+            <button class="set-btn" :disabled="s.restore.reading || restoreBusy"
+                    @click="browse(RESTORE_TARGET)">
+              {{ s.restore.reading ? 'Reading…' : (restoreBusy ? 'Restoring…' : 'Restore from backup…') }}
+            </button>
             <span v-if="s.restartMsg" class="set-hint set-restart-msg">{{ s.restartMsg }}</span>
+          </div>
+          <div class="set-hint">
+            Copies a backup folder's contents back where they came from. It merges and
+            never deletes: a file in the backup replaces the one at the destination, and
+            a file only at the destination is left alone.
+          </div>
+
+          <!-- Everything below appears only once a folder has been read, so the button
+               above is the whole control until there is something to say about it. -->
+          <div v-if="s.restore.root" class="rst-box">
+            <div class="rst-head">
+              <div class="rst-path">{{ s.restore.root }}</div>
+              <button class="set-x" :disabled="restoreBusy" @click="restoreClear">✕</button>
+            </div>
+
+            <div v-if="s.restore.reason" class="rst-warn">
+              {{ s.restore.reason }}
+              <!-- Picking the folder the backups go into rather than a backup is the
+                   likely mistake, so it is answered with the list rather than denied. -->
+              <div v-if="s.restore.stamps.length" class="rst-stamps">
+                <button v-for="st in s.restore.stamps" :key="st.path" class="set-clr"
+                        @click="restoreInspect(st.path)">{{ st.name }}</button>
+              </div>
+            </div>
+
+            <template v-else>
+              <label v-for="p in s.restore.parts" :key="p.key" class="rst-row"
+                     :class="{ off: p.blocked || !p.files }">
+                <input type="checkbox" v-model="s.restore.pick[p.key]"
+                       :disabled="restoreBusy || !!p.blocked || !p.files">
+                <span class="rst-body">
+                  <span class="rst-line">
+                    <b>{{ p.label }}</b>
+                    <span class="rst-size">{{ p.blocked ? '' : (p.files ? fmtNum(p.files) + ' files · ' + fmtBytes(p.bytes) : 'empty') }}</span>
+                  </span>
+                  <span class="rst-sub">→ {{ p.to }}</span>
+                  <span v-if="p.detail" class="rst-sub">{{ p.detail }}</span>
+                  <span v-if="p.blocked" class="rst-note">{{ p.blocked }}</span>
+                  <!-- The number that makes the decision, on the row it belongs to. -->
+                  <span v-else-if="p.existing" class="rst-note">
+                    {{ fmtNum(p.existing) }} of these already exist and would be overwritten
+                  </span>
+                  <span v-if="p.key === 'config' && !p.blocked && p.files" class="rst-note">
+                    Overwrites config.json over a running server — a different password in
+                    the backup signs you out, and the port and media root need a restart.
+                  </span>
+                </span>
+              </label>
+
+              <div class="rst-foot">
+                <div class="rst-total">
+                  <template v-if="restorePicked.length">
+                    {{ fmtNum(restoreTotals.files) }} files · {{ fmtBytes(restoreTotals.bytes) }}
+                    <span v-if="restoreTotals.existing" class="set-hint">
+                      — {{ fmtNum(restoreTotals.existing) }} overwritten
+                    </span>
+                  </template>
+                  <span v-else class="set-hint">Nothing ticked</span>
+                </div>
+                <button class="set-btn btn-ok btn-accent"
+                        :disabled="!restorePicked.length || restoreBusy" @click="runRestore">
+                  {{ restoreBusy ? 'Restoring…' : 'Restore' }}
+                </button>
+              </div>
+            </template>
+
+            <!-- Stays up after it finishes: what came back, and where, is the thing
+                 worth reading once a restore has run. -->
+            <div v-if="s.restore.job" class="rst-job" :class="s.restore.job.state">
+              <div>
+                <b>{{ s.restore.job.state === 'running' ? 'Restoring' : (s.restore.job.state === 'failed' ? 'Restore failed' : 'Restored') }}</b>
+                {{ fmtNum(s.restore.job.files) }} files · {{ fmtBytes(s.restore.job.bytes) }}
+                <span v-if="s.restore.job.folder" class="set-hint">— {{ s.restore.job.folder }}</span>
+              </div>
+              <pre v-if="s.restore.job.log" class="rst-log">{{ s.restore.job.log }}</pre>
+              <div v-if="s.restore.job.error" class="rst-warn">{{ s.restore.job.error }}</div>
+            </div>
           </div>
         </div>
 

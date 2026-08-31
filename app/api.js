@@ -87,9 +87,24 @@ export const api = {
   // progress, and the page polls it while a run is going.
   maintenanceState: () => req('/api/maintenance/state'),
   maintenanceScan: () => post('/api/maintenance/scan'),
+  // Read-only: stats the folder and its parent, creates nothing. The answer is a
+  // { ok, reason } rather than an error, because "not a folder yet" is the normal state
+  // of a field somebody is halfway through typing.
+  maintenanceBackupCheck: p => req('/api/maintenance/backup-check?path=' + enc(p || '')),
   // confirm is sent as a separate field from the selection: a selection alone is a
-  // preference, and this endpoint deletes permanently.
-  maintenanceClean: selection => post('/api/maintenance/clean', { confirm: true, selection }),
+  // preference, and this endpoint deletes permanently. backupPath is only read when the
+  // selection ticks 'backup', and the server re-checks it either way.
+  maintenanceClean: (selection, backupPath) =>
+    post('/api/maintenance/clean', { confirm: true, selection, backupPath: backupPath || '' }),
+
+  // Restore (Settings → Config → Server). inspect is read-only and answers
+  // { ok, parts | stamps, reason }; the run answers as soon as it has started, so state
+  // is what reports progress — same shape as the Clean page's, for the same reason.
+  restoreInspect: p => req('/api/restore/inspect?path=' + enc(p || '')),
+  restoreState: () => req('/api/restore/state'),
+  // Merges and never deletes, so it is safe to run twice — but it overwrites, which is
+  // why confirm is a separate field from the folder, exactly as it is for a clean.
+  restore: (path, parts) => post('/api/restore', { confirm: true, path, parts }),
 
   // Restart the server. Answers before it goes, so a rejected fetch after this call is
   // the expected shape of success, not a failure -- the caller polls for the port instead.

@@ -18,7 +18,7 @@ node server.js 8080 /path/to/media # override port and media root
 
 - **server.js** — Node.js HTTP server (no external dependencies). Serves the front end, exposes REST APIs for listing/favoriting/deleting media, and proxies ComfyUI (HTTP + WebSocket).
 - **index.html** — a small shell only: the stylesheet/script tags and the mount point. The application lives in `app/`.
-- **app/** — the SPA, as native ES modules with no build step. `router.js` (routes), `store.js` (shared reactive state), `views/` (one per route), `components/` (the chrome, the dialogs and the shared pieces below). Vue 3 is the global build, vendored under `vendor/`.
+- **app/** — the SPA, as native ES modules with no build step. `router.js` (routes), `store.js` (shared reactive state), `format.js` (`fmtNum`/`fmtBytes`, shared rather than copied: a second `fmtBytes` is the kind of thing that quietly rounds differently and reports one folder at two sizes on two pages), `views/` (one per route), `components/` (the chrome, the dialogs and the shared pieces below). Vue 3 is the global build, vendored under `vendor/`.
 - **config.json** — Runtime config (ports, paths, API keys). Gitignored; create it by copying `config.example.json`.
 - **Media/** — Default media root browsed by the app. Gitignored.
 
@@ -371,9 +371,13 @@ Several things about it are load-bearing:
 | POST | `/api/workflows/save` | Write an image's embedded graph out as a new workflow |
 | POST | `/api/workflows/update` | Overwrite a workflow's own `.json` with the fields on screen |
 | GET/POST | `/api/settings` | Read (keys masked) / merge into config.json and hot-reload |
-| GET | `/api/maintenance/state` | Clean: the option list, the remembered ticks, the last measurement, the job and its log |
+| GET | `/api/maintenance/state` | Clean: the option list, the remembered ticks, the remembered backup folder, the last measurement, the job and its log |
+| GET | `/api/maintenance/backup-check` | Clean: can a backup be written to this folder? Stats it and its parent, creates nothing |
 | POST | `/api/maintenance/scan` | Clean: measure every target (deletes nothing) |
-| POST | `/api/maintenance/clean` | Clean: run the ticked selection — takes `confirm: true` as well as the selection |
+| POST | `/api/maintenance/clean` | Clean: back up if asked, then run the ticked selection — takes `confirm: true` as well as the selection |
+| GET | `/api/restore/inspect` | Restore: what is in this backup folder, where each piece would go, and how much of it already exists |
+| GET | `/api/restore/state` | Restore: how the copy is going, and what the last one did |
+| POST | `/api/restore` | Restore: copy the chosen pieces back — takes `confirm: true` as well as the folder and the parts |
 
 `/api/workflows/update` and the run path share `applyFieldConfigOverrides`, so a
 value can only ever land where a run would have put it; the rest of the graph is
@@ -442,6 +446,12 @@ Copy `config.example.json` to `config.json` and fill in your values. Every field
   wipe.
 - `maintenanceSelection` — the remembered ticks. Written by the Clean page on Run; not
   meant to be edited by hand.
+- `maintenanceBackupDir` — the folder the last backup was written into, so the field on the
+  Clean page comes back filled in. Written on Run alongside the ticks, and remembered even
+  when the tick is off — it is the folder chosen last, not a statement that a backup will
+  happen. Unlike `maintenanceScript`, this one **is** settable from the browser, and safely
+  so: it names somewhere to copy *to*, it never reaches a command line, and it is
+  re-validated on every run.
 - `mediaCachePolicy` — how long the browser may keep media: `nostore` (default), `validate`, or `day`. Whitelisted server-side before it reaches a `Cache-Control` header. Note that **no header deletes files at a deadline** — `max-age` governs reuse, not retention — so only `nostore` keeps media out of the cache at all. Logout also sends `Clear-Site-Data`, which Safari ignores.
 - `nsfwTermsB64` — the content-filter word list safe mode matches on (see below)
 - `auth` — optional password gate: `{ "enabled": true, "hash": "scrypt$<salt>$<key>" }`, managed from Settings → Security. Only the hash is stored, and the gate stays off unless a hash exists. While on, everything (pages, APIs, `/file`, `/thumb`, the WS proxy) is refused until a session cookie arrives — see below.
@@ -464,9 +474,92 @@ Caveats when running under a service account (e.g. Windows SYSTEM) or otherwise 
 Explorer's thumbnail cache, the browser caches, the Windows breadcrumb layer, the
 generated-media folders, the Recycle Bin, the shadow copies, and a closing ReTrim. Every
 row carries the file count and size the script measured, because a question answered
-without knowing the cost is the one that deletes the wrong thing. There is no Save button
+without knowing the cost is the one that deletes the wrong thing. **The page re-measures
+on every visit**, not only when it has never measured before: the report is a file on disk
+and it outlives the folders it describes, and a week-old one saying *already empty* beside
+a folder holding 124 files is the exact failure the measurements exist to prevent. The
+scan bar states the measurement's **age**, not its wall-clock time — the old label printed
+no date, so last Tuesday read as this morning — and turns amber with a warning above the
+Run button if anything is still showing numbers older than ten minutes. There is no Save button
 — the ticks are remembered **on Run**, since the selection that ran is the one worth
-coming back to.
+coming back to. Above all of them sits **Backup before purging**, which is the answer to
+the sentence every other row ends in.
+
+### Backup before purging
+
+The first row, and the only one that runs before anything is deleted rather than deciding
+what gets deleted. Ticked, with a folder in the field beside it, a run copies **whichever
+of ComfyUI input, ComfyUI output and the app media library it is about to delete** into
+`<chosen folder>/yyyy-mm-dd-HHmm/`, and starts the wipe only once every file is on disk.
+Not temp and not the caches: those are copies of things already, and temp is the
+throwaway the page exists to clear.
+
+**The app's own state goes in every one**, as `config/` beside the media folders:
+`config.json`, `app-workflows.json`, `app-prompts.json`, `app-replacements.json`,
+`app-prompt-index.json` and `seed.json` — `maintStateFiles()`, named by their constants
+rather than by filename so `COMFYREMIX_CONFIG` is honoured and a second instance backs up
+the config it is actually running on. None of them is a wipe target; they are there
+because a media backup that does not carry the prompts, rules and workflows that produced
+it is half a backup, and the whole set is about a hundred kilobytes. A missing one is
+skipped rather than fatal — an install that has never opened the Prompts page has no
+`app-prompts.json`. The index is derived and included anyway: rebuilding it re-reads the
+embedded metadata of every file in the library, and it is 70 KB. `seed.json` is in git and
+is included anyway: a backup that needs the repo to be restorable is not one.
+
+**`config.json` is copied whole, keys and password hash included.** Redacting it would
+make the backup unrestorable, which is the one thing a backup may not be — so the row says
+so instead, under the tick, and where the folder lands becomes a choice worth making
+carefully.
+
+**The media half is scoped to the ticks because the copy is.** A backup exists to make a
+purge recoverable, so copying a 200 GB library this run is not going to touch costs an
+hour and buys nothing. The corner that follows is a caches-only run with the box left
+ticked, whose dated folder holds `config/` and nothing else: the row says so before the
+button (`backupCovers` is empty → a note under it, and `meta` reads *settings only*), the
+confirmation says so again, and the log says so rather than leaving a half-empty folder to
+be discovered later. It is not a reason to block Run — caches-only is a perfectly good run
+to make, and the settings snapshot is worth having on its own.
+
+`maintBackupSources(sel)` is the filter, and with no argument it returns all three —
+which is how `maintWipeTargets` calls it, because where a backup may be *written* has
+nothing to do with which rows are ticked today. The page needs the same list to count the
+cost and name the folders, so the backup option carries `covers`, read straight off
+`maintBackupSources()` rather than typed out a second time.
+
+- **It runs in the server process, not in the scheduled task** — the one part of Clean
+  that is not Windows-only. The reason the wipe cannot run as SYSTEM is `%LOCALAPPDATA%`;
+  a file copy has no such dependency, so it is plain `fs` and needs no changes the day
+  the wipe half grows a POSIX equivalent. It is also what gives the ordering its teeth:
+  the task is not poked until the copy has finished, and *any* error aborts before the
+  delete. A half-copy in front of a completed wipe is worse than no backup, because it
+  looks like one.
+- **Whether the task can run at all is asked first.** Everywhere else that check happens
+  as the run starts; here it happens before the copy, because spending an hour copying a
+  media library for a wipe that was never going to start is the one way this could waste
+  more than it saves.
+- **The destination may not sit inside anything a run can delete, or contain it.**
+  `maintBackupCheck` refuses both directions against every target — the three sources plus
+  `comfyTemp` and `maintenanceExtraTargets` — because backing up into the folder you are
+  about to empty looks like it worked right up until the wipe. It also refuses a relative
+  path, a file, and a folder whose parent does not exist either; a folder whose parent
+  *does* exist is created, since that is a path someone meant to type.
+- **The Run button is disabled with the reason underneath, not silent.** The page checks
+  the field as it is typed into (debounced — this stats a directory) and the server checks
+  again on the run itself, because an answer the client already holds is not a check.
+- **Free space is a warning and never a block.** The estimate sums the scan's own
+  measurement of the covered rows that are ticked — the same report rows the totals at
+  the foot add up. It leaves out the git-tracked files the copy takes anyway and cannot
+  know the destination is the volume being emptied. It is computed on the page rather
+  than sent, because it depends on which rows are ticked *right now* and only the page
+  knows that.
+- **Symlinks are skipped and counted.** Following one could copy a tree from anywhere on
+  the machine into a folder someone believes holds their media, and a link pointing back
+  inside the source would copy it into itself until the disk filled. The count is on the
+  log, because a silently skipped file in a backup is the worst kind there is.
+- **The copy is a phase of the clean, not a job of its own.** `maintJob` reports it as the
+  same run with `phase: 'backup'`, its progress moves while it copies, and its lines are
+  held in memory and put back in front of the task's log — that file is deleted on the way
+  to poking the task, so a transcript would otherwise begin halfway through the run.
 
 **The server does none of the work, deliberately.** It runs as SYSTEM here, and SYSTEM is
 the wrong account for this even though it is the privileged one: every per-user store the
@@ -497,6 +590,51 @@ the page says so rather than reporting a run that never happened.
 
 The wrapper and the one-time registration script live in `scripts/`, which is gitignored
 on this install — see `CLAUDE.local.md` for the task name and the setup command.
+
+## Restoring a backup (Settings → Config → Server)
+
+The inverse of the backup above, and **deliberately not on the Clean page**. Clean reports
+itself unavailable whenever its scheduled task is not registered — and a machine whose task
+is not registered is a machine that has just been rebuilt, which is the one you most want
+to restore onto. A restore needs no task: it is the same plain `fs` the backup half is,
+so it sits beside **Restart server** in the Config tab's Server actions and works anywhere
+the app runs.
+
+**It merges and never deletes.** A file in the backup overwrites the one at the
+destination; a file only at the destination is left exactly where it is. Making a
+destination *identical* to a backup would mean deleting, and nothing here deletes — that
+is the Clean page's job, with all of the Clean page's confirmations. It follows that a
+restore is safe to run twice, which is what makes a failed one recoverable by simply
+running it again.
+
+- **Three steps, and the middle one is the point.** Pick a folder, read back what is in it
+  and *what that would overwrite*, then copy. `restoreInspect` walks each part and counts
+  how many of its files already exist at the destination, because "4,201 files" says what
+  a restore will take while "812 of them already exist" is what the decision actually
+  turns on. Nothing is written until that list has been on screen.
+- **Picking the folder above a backup is answered, not just refused.** That is the likely
+  mistake — the backups go into `<chosen>/yyyy-mm-dd-HHmm/` — so a folder with no
+  recognisable parts is scanned for dated subfolders and they come back as clickable rows,
+  each carrying its own absolute path. The client never joins a path; that is the same rule
+  `/api/browse-dirs` and `FolderPicker` follow, and for the same reason.
+- **The settings start unticked.** Everything else that has files in it starts on, but the
+  settings overwrite `config.json` over a server that is running on it: a different
+  password in the backup signs you out (the session key derives from the hash), and the
+  port and media root are read once at startup so they need a restart. That is a second
+  deliberate decision, not something that happens because a folder was picked.
+- **Only the basenames the backup takes are written back**, straight to the constants they
+  came from (`restoreStateMap`, off `maintStateFiles`). A stray file dropped into
+  `config/` therefore has nowhere to land: a restore cannot write anything into the app
+  directory that a backup did not put there.
+- **Restoring the settings re-reads what is held in memory.** `app-workflows.json` and
+  `app-replacements.json` are read from disk per request and need nothing; `config.json`
+  needs `reloadConfig()`, and `promptIndex` is held in memory and written back on a
+  debounce — so a restored index would be overwritten by the next save rather than adopted
+  unless it is re-read here, on the same terms as startup.
+- **A folder inside its own destination is refused.** Copying a tree out of itself never
+  terminates. A backup this app took can never be in that position (`maintBackupCheck`
+  refuses it), but a folder assembled by hand can be, so the row is blocked rather than
+  trusted to be well made.
 
 ## Same-origin guard
 

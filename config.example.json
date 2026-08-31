@@ -14,5 +14,6 @@
   "comfyTemp": "",
   "dockerContainer": "",
   "maintenanceExtraTargets": [],
+  "maintenanceBackupDir": "",
   "restartCmd": ""
 }

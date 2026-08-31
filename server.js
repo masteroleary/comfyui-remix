@@ -2066,6 +2066,16 @@ const maintFile = name => path.join(maintDir(), name);
 // WorkflowFields owns the controls it builds. Order follows the console's questions,
 // except that the caches come first: they are what the button is named after.
 const MAINT_OPTIONS = [
+  // First, because it is the only row that runs before anything is deleted rather than
+  // deciding what gets deleted — and because it is the answer to the line every other
+  // row ends in. kind:'path' is what tells the page this one carries a folder field.
+  // `covers` is read straight off maintBackupSources rather than typed out again: it is
+  // what the page counts the copy's size from and names in its warnings, and a second
+  // list here is one that can disagree with the one that does the copying.
+  { key: 'backup', kind: 'path', covers: maintBackupSources().map(s => s.key),
+    group: 'Before anything is deleted', label: 'Backup before purging',
+    sub: 'Copies whichever of ComfyUI input, ComfyUI output and the app media library this run deletes into a dated folder here first, and only starts the wipe once every file is on disk. Your settings, workflows, prompts and replacement rules go in every one. Not temp and not the caches — those are copies of things already.' },
+
   { key: 'thumbs', group: 'Caches', label: 'Explorer thumbnail cache',
     sub: 'Thumbnails of everything you browsed in Explorer — they outlive the originals. Clearing this restarts Explorer.' },
   { key: 'browsers', group: 'Caches', label: 'Browser caches (Edge + Chrome)',
@@ -2096,6 +2106,12 @@ const MAINT_OPTIONS = [
 ];
 // Which media keys map to which -Only token. Anything not in here is not a media target.
 const MAINT_ONLY = { input: 'Input', output: 'Output', media: 'Media', temp: 'Temp', samples: 'Samples', lora: 'Lora' };
+// Rows that qualify a run rather than name something to delete. Excluded from the "is
+// anything ticked?" test and from the page's totals, and sent to the page rather than
+// kept in both: a modifier the page did not know about would be counted as a deletion
+// target, and one the server did not know about would let an otherwise-empty selection
+// start a run.
+const MAINT_MODIFIERS = ['backup', 'closeBrowsers', 'trim'];
 // What a first-time visitor gets ticked: the three the button is named for, and nothing
 // that deletes media.
 const MAINT_DEFAULTS = ['thumbs', 'browsers', 'breadcrumbs'];
@@ -2122,7 +2138,7 @@ function maintParams(sel) {
   if (!(sel.trim && (only.length || sel.recycle))) p.SkipTrim = true;
   return p;
 }
-const maintPicked = sel => MAINT_OPTIONS.some(o => o.key !== 'closeBrowsers' && o.key !== 'trim' && sel[o.key]);
+const maintPicked = sel => MAINT_OPTIONS.some(o => !MAINT_MODIFIERS.includes(o.key) && sel[o.key]);
 
 // The remembered ticks. Stored in config.json so they follow the account rather than the
 // browser — the run is machine-wide, and choosing it on a phone then losing it on the
@@ -2135,7 +2151,7 @@ function maintSelection() {
   }
   return out;
 }
-function maintSaveSelection(sel) {
+function maintSaveSelection(sel, backupDir) {
   // Read-then-write-the-whole-file, so a failed read must abort rather than fall
   // through with an empty object: writing {} back over config.json drops
   // auth.hash — silently turning the password gate off — and the API key with it.
@@ -2145,6 +2161,10 @@ function maintSaveSelection(sel) {
     throw new Error('config.json is unreadable — refusing to overwrite it: ' + e.message);
   }
   cur.maintenanceSelection = Object.fromEntries(MAINT_OPTIONS.map(o => [o.key, !!sel[o.key]]));
+  // Remembered whether or not the tick is on: the field holds the folder chosen last,
+  // which is not the same statement as "back up this time". Unticking now and ticking
+  // again next visit should not mean finding the path again.
+  if (typeof backupDir === 'string' && backupDir) cur.maintenanceBackupDir = backupDir;
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cur, null, 2));
   reloadConfig();
 }
@@ -2158,6 +2178,412 @@ function maintReadJson(name) {
   try { return JSON.parse(t); } catch { return null; }
 }
 
+// ── Clean: the backup that goes in front of it ─────────────────────────────
+// A wipe is permanent by design — nothing goes to the Recycle Bin — so the only thing
+// that can make one recoverable is a copy taken first. That copy happens *here*, in the
+// server process, and not in the scheduled task like everything else on this page:
+//
+//   * It needs no per-user profile. The reason the wipe cannot run as SYSTEM is that
+//     every store it clears is found through %LOCALAPPDATA% / %APPDATA%; a file copy
+//     has no such dependency, and SYSTEM can read all three folders.
+//   * It is plain fs, so it is the one half of Clean that is not Windows-only. The wipe
+//     is a scheduled task and the page says so on any other platform; when that half
+//     grows a POSIX equivalent, this half needs no changes.
+//
+// The ordering is the whole point: the task is not poked until every file is on disk,
+// and *any* error aborts before the delete. A half-copy in front of a completed wipe is
+// worse than no backup at all, because it looks like one.
+const maintBytes = n => {
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0, v = Number(n) || 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(i > 0 && v < 10 ? 2 : 0) + ' ' + u[i];
+};
+
+// yyyy-mm-dd-HHmm, in local time: this names a folder somebody will read in a file
+// manager, and a UTC stamp there is a puzzle rather than a date.
+function maintStamp(d) {
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+
+// What a backup copies, and the name it lands under inside the dated folder. The three
+// folders a wipe cannot put back — temp is throwaway previews and the caches are copies
+// of things by definition, so neither is worth the disk.
+//
+// With a selection it returns only the folders that selection deletes: a backup exists
+// to make a purge recoverable, and copying a 200 GB library that this run is not going
+// to touch costs an hour and buys nothing. Without one — which is how maintWipeTargets
+// calls it — it returns all three, because where a backup may be *written* has nothing
+// to do with which folders are ticked today.
+function maintBackupSources(sel) {
+  const all = [
+    { key: 'input', name: 'input', from: path.join(COMFY_DIR, 'input') },
+    { key: 'output', name: 'output', from: COMFY_OUTPUT },
+    { key: 'media', name: 'Media', from: ROOT },
+  ];
+  return sel ? all.filter(s => sel[s.key]) : all;
+}
+// Every folder a run could delete, whether or not it is ticked this time. Used only to
+// refuse a destination sitting inside one of them, or containing one: backing up into
+// the thing you are about to delete is precisely the mistake this feature exists to
+// prevent, and it would look like it had worked right up until the wipe.
+function maintWipeTargets() {
+  const t = maintBackupSources().map(s => ({
+    label: s.name === 'Media' ? 'the app media library' : ('ComfyUI ' + s.name), path: s.from,
+  }));
+  if (config.comfyTemp) t.push({ label: 'ComfyUI temp', path: String(config.comfyTemp) });
+  const extras = Array.isArray(config.maintenanceExtraTargets) ? config.maintenanceExtraTargets : [];
+  for (const x of extras) {
+    const p = typeof x === 'string' ? x : (x && x.path);
+    if (p) t.push({ label: (x && x.label) || 'an extra clean target', path: String(p) });
+  }
+  return t.filter(x => x.path);
+}
+
+// The app's own state: what it was configured to do, and the text it does it with.
+// None of it is a wipe target — nothing on this page deletes these — but a media backup
+// that does not carry the prompts, rules and workflows that produced it is half a
+// backup, and the whole set is about a hundred kilobytes. So it goes into every backup,
+// whatever is ticked, and it is the reason a caches-only run with the box on still has
+// something to write.
+//
+// Named by their constants rather than by filename: CONFIG_PATH honours
+// COMFYREMIX_CONFIG, so a second instance backs up the config it is actually running on
+// and not the one it happens to sit beside.
+//
+// app-prompt-index.json earns its place despite being derived: rebuilding it means
+// re-reading the embedded metadata of every file in the library, which is a long
+// background pass, and it is 70 KB. seed.json is in git and is here anyway — a backup
+// that needs the repo to be restorable is not one.
+const maintStateFiles = () => [CONFIG_PATH, WF_STORE_PATH, PROMPTS_PATH, REPL_PATH, PROMPT_INDEX_PATH, SEED_PATH];
+
+const maintFreeBytes = p => { try { const s = fs.statfsSync(p); return s.bavail * s.bsize; } catch { return null; } };
+
+// Is this folder somewhere a backup can be written? Answered here and nowhere else: the
+// page calls it as you type so the Run button can say why it is disabled, and the run
+// calls it again on what actually arrives, because a client's verdict is not a check.
+function maintBackupCheck(raw) {
+  const v = String(raw == null ? '' : raw).trim();
+  if (!v) return { ok: false, resolved: '', reason: 'Choose a folder to back up into.' };
+  if (!path.isAbsolute(v)) return { ok: false, resolved: '', reason: 'Needs a full path, not a relative one.' };
+  const p = path.resolve(v);
+  for (const t of maintWipeTargets()) {
+    if (isInside(p, t.path)) return { ok: false, resolved: p, reason: 'That is inside ' + t.label + ', which a run can delete — the backup would go with it.' };
+    if (isInside(t.path, p)) return { ok: false, resolved: p, reason: 'That folder contains ' + t.label + ', which a run can delete. Pick somewhere outside it.' };
+  }
+  let st = null;
+  try { st = fs.statSync(p); } catch {}
+  if (st && !st.isDirectory()) return { ok: false, resolved: p, reason: 'That path is a file, not a folder.' };
+  // A typed path whose parent exists is a folder not made yet, which is a reasonable
+  // thing to type. One whose parent does not exist is a typo, and the minute before a
+  // wipe is the wrong time to find that out by silently building a tree nobody meant.
+  const probe = st ? p : path.dirname(p);
+  if (!st) {
+    let ps = null;
+    try { ps = fs.statSync(probe); } catch {}
+    if (!ps || !ps.isDirectory()) return { ok: false, resolved: p, reason: 'Neither that folder nor the one above it exists.' };
+  }
+  try { fs.accessSync(probe, fs.constants.W_OK); }
+  catch { return { ok: false, resolved: p, reason: 'No permission to write there.' }; }
+  return { ok: true, resolved: p, exists: !!st, willCreate: !st, reason: '', free: maintFreeBytes(probe) };
+}
+
+// The run in progress, or the last one, held for as long as the clean it belongs to is
+// the run on screen. Progress is mutated in place so the page's poll sees it move.
+let maintBackup = null;
+const maintBackupState = () => maintBackup && {
+  state: maintBackup.state, dest: maintBackup.dest, error: maintBackup.error,
+  files: maintBackup.progress.files, bytes: maintBackup.progress.bytes,
+  skipped: maintBackup.progress.skipped, folder: maintBackup.progress.folder,
+};
+
+// One directory, recursively, into one destination.
+//
+// A symlink is skipped rather than followed. Following one could copy a tree from
+// anywhere on the machine into a folder someone believes holds their media, and a link
+// pointing back inside the source would copy it into itself until the disk filled. The
+// same goes for anything that is neither a file nor a directory. Skips are counted and
+// reported: a silently skipped file in a backup is the worst kind there is.
+async function maintCopyTree(src, dest, prog) {
+  const entries = await fs.promises.readdir(src, { withFileTypes: true });
+  await fs.promises.mkdir(dest, { recursive: true });
+  for (const ent of entries) {
+    const from = path.join(src, ent.name), to = path.join(dest, ent.name);
+    if (ent.isSymbolicLink() || (!ent.isFile() && !ent.isDirectory())) { prog.skipped++; continue; }
+    if (ent.isDirectory()) { await maintCopyTree(from, to, prog); continue; }
+    const st = await fs.promises.lstat(from);
+    await fs.promises.copyFile(from, to);
+    // Timestamps, or the copy sorts by "just now" and a library organised by date
+    // arrives as one undifferentiated pile. Best-effort: losing them is not a failure.
+    try { await fs.promises.utimes(to, st.atime, st.mtime); } catch {}
+    prog.files++; prog.bytes += st.size;
+  }
+}
+
+// A flat list of files into one folder, by basename. Separate from maintCopyTree because
+// these are scattered across the app directory rather than being a tree, and because a
+// missing one is normal — an install that has never opened the Prompts page has no
+// app-prompts.json, and that is not a failure to abort a backup over.
+async function maintCopyFiles(files, dest, prog) {
+  let made = false;
+  for (const from of files) {
+    let st = null;
+    try { st = await fs.promises.lstat(from); } catch { continue; }
+    if (!st.isFile()) continue;
+    if (!made) { await fs.promises.mkdir(dest, { recursive: true }); made = true; }
+    const to = path.join(dest, path.basename(from));
+    await fs.promises.copyFile(from, to);
+    try { await fs.promises.utimes(to, st.atime, st.mtime); } catch {}
+    prog.files++; prog.bytes += st.size;
+  }
+}
+
+// Copy whatever this selection deletes into <destRoot>/<yyyy-mm-dd-HHmm>, then hand
+// back. The callback gets an error string, or null when every file is on disk — and only
+// null may start a wipe.
+function maintRunBackup(destRoot, sel, done) {
+  const started = new Date();
+  const stamp = maintStamp(started);
+  let dest = path.join(destRoot, stamp);
+  // Two runs within the same minute would otherwise pour the second into the first.
+  for (let n = 2; fs.existsSync(dest); n++) dest = path.join(destRoot, stamp + '-' + n);
+  const b = maintBackup = {
+    id: String(Date.now()), state: 'running', dest,
+    startedAt: started.toISOString(), endedAt: '', error: '',
+    progress: { files: 0, bytes: 0, skipped: 0, folder: '' },
+    log: ['=== backup === ' + dest],
+  };
+  (async () => {
+    // Settings first, and always: they are what tells you how the media beside them was
+    // made, and they are the fastest thing here by three orders of magnitude.
+    b.progress.folder = 'config';
+    const cfgWas = { files: b.progress.files, bytes: b.progress.bytes };
+    await maintCopyFiles(maintStateFiles(), path.join(dest, 'config'), b.progress);
+    b.log.push('    config <- app settings, workflows, prompts, rules');
+    b.log.push('      ' + (b.progress.files - cfgWas.files) + ' files, ' + maintBytes(b.progress.bytes - cfgWas.bytes));
+
+    const sources = maintBackupSources(sel);
+    // A caches-only run with the box ticked takes the settings and no media, which is
+    // correct and must still be said out loud: a dated folder holding nothing but a
+    // config directory reads as a backup that half failed.
+    if (!sources.length) b.log.push('    no media copied -- this run deletes none of ComfyUI input, ComfyUI output or the media library');
+    for (const src of sources) {
+      b.progress.folder = src.name;
+      let st = null;
+      try { st = fs.statSync(src.from); } catch {}
+      if (!st || !st.isDirectory()) { b.log.push('    ' + src.name + ' -- not present (' + src.from + '), nothing to copy'); continue; }
+      const was = { files: b.progress.files, bytes: b.progress.bytes };
+      b.log.push('    ' + src.name + ' <- ' + src.from);
+      await maintCopyTree(src.from, path.join(dest, src.name), b.progress);
+      b.log.push('      ' + (b.progress.files - was.files).toLocaleString('en-US') + ' files, ' + maintBytes(b.progress.bytes - was.bytes));
+    }
+    b.progress.folder = '';
+  })().then(() => {
+    b.state = 'done';
+    b.endedAt = new Date().toISOString();
+    b.log.push('BACKUP OK -- ' + b.progress.files.toLocaleString('en-US') + ' files, ' + maintBytes(b.progress.bytes)
+      + (b.progress.skipped ? ' (' + b.progress.skipped + ' link/special file(s) skipped)' : ''));
+    b.log.push('');
+    done(null);
+  }).catch(err => {
+    b.state = 'failed';
+    b.endedAt = new Date().toISOString();
+    b.error = 'The backup failed after ' + b.progress.files.toLocaleString('en-US') + ' files: ' + err.message
+      + ' — nothing has been deleted. The partial copy is still at ' + b.dest + '.';
+    b.log.push('BACKUP FAILED -- ' + err.message);
+    b.log.push('Nothing was deleted.');
+    done(b.error);
+  });
+}
+
+// ── Restore: a backup folder, put back ─────────────────────────────────────
+// The inverse of the backup above, and deliberately *not* on the Clean page. That page
+// is unavailable whenever the scheduled task is not registered — which is the exact
+// state of a machine that has just been rebuilt, and a machine that has just been
+// rebuilt is the one you most want to restore onto. This needs no task: it is the same
+// plain fs the backup half is, so it lives with the other server actions in Settings and
+// works anywhere the app runs.
+//
+// **It merges and never deletes.** A file in the backup overwrites the one at the
+// destination; a file only at the destination is left exactly where it is. Making a
+// destination *identical* to a backup would mean deleting, and nothing here deletes —
+// that is the other page's job, with all of the other page's confirmations.
+function restoreParts() {
+  return [
+    { key: 'input', name: 'input', label: 'ComfyUI input', to: path.join(COMFY_DIR, 'input') },
+    { key: 'output', name: 'output', label: 'ComfyUI output', to: COMFY_OUTPUT },
+    { key: 'media', name: 'Media', label: 'App media library', to: ROOT },
+    // Only the basenames the backup took, straight back to the constants they came from.
+    // A stray file dropped into config/ therefore has nowhere to land: a restore cannot
+    // write anything into the app directory that a backup did not put there.
+    { key: 'config', name: 'config', label: 'Settings, workflows, prompts and rules',
+      to: __dirname, state: true },
+  ];
+}
+const restoreStateMap = () => Object.fromEntries(maintStateFiles().map(p => [path.basename(p), p]));
+
+// What a dated folder is named, so the picker landing on the folder *above* one can say
+// so and list what is in there rather than just reporting nothing.
+const RESTORE_STAMP_RE = /^\d{4}-\d{2}-\d{2}-\d{4}(-\d+)?$/;
+
+// How much is in there, and how much of it is already at the destination. The second
+// number is the one that makes the confirmation mean anything: "4,201 files" says what a
+// restore will take, "812 of them already exist" says what it will overwrite.
+async function restoreMeasureTree(src, dest) {
+  let files = 0, bytes = 0, existing = 0;
+  const walk = async (from, to) => {
+    let entries = [];
+    try { entries = await fs.promises.readdir(from, { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      if (ent.isSymbolicLink()) continue;
+      const f = path.join(from, ent.name), t = path.join(to, ent.name);
+      if (ent.isDirectory()) { await walk(f, t); continue; }
+      if (!ent.isFile()) continue;
+      let st = null;
+      try { st = await fs.promises.lstat(f); } catch { continue; }
+      files++; bytes += st.size;
+      try { await fs.promises.access(t); existing++; } catch {}
+    }
+  };
+  await walk(src, dest);
+  return { files, bytes, existing };
+}
+async function restoreMeasureState(src) {
+  let files = 0, bytes = 0, existing = 0;
+  const names = [];
+  for (const [base, to] of Object.entries(restoreStateMap())) {
+    let st = null;
+    try { st = await fs.promises.lstat(path.join(src, base)); } catch { continue; }
+    if (!st.isFile()) continue;
+    files++; bytes += st.size; names.push(base);
+    try { await fs.promises.access(to); existing++; } catch {}
+  }
+  return { files, bytes, existing, detail: names.join(', ') };
+}
+
+// What is in this folder, and where each piece would go. Read-only: it stats and walks,
+// and creates nothing.
+async function restoreInspect(raw) {
+  const v = String(raw == null ? '' : raw).trim();
+  if (!v) return { ok: false, resolved: '', reason: 'Choose a backup folder.' };
+  if (!path.isAbsolute(v)) return { ok: false, resolved: '', reason: 'Needs a full path, not a relative one.' };
+  const root = path.resolve(v);
+  let st = null;
+  try { st = fs.statSync(root); } catch {}
+  if (!st || !st.isDirectory()) return { ok: false, resolved: root, reason: 'That folder does not exist.' };
+
+  const parts = [];
+  for (const p of restoreParts()) {
+    const from = path.join(root, p.name);
+    let ps = null;
+    try { ps = fs.statSync(from); } catch {}
+    if (!ps || !ps.isDirectory()) continue;
+    const row = { key: p.key, label: p.label, name: p.name, from, to: p.to, state: !!p.state };
+    // Copying a folder out of itself never terminates, and a backup taken by this app
+    // can never be in that position — maintBackupCheck refuses it. A folder assembled by
+    // hand can be, so it is refused here rather than trusted to be well made.
+    if (isInside(from, p.to) || isInside(p.to, from)) {
+      row.blocked = 'That folder is inside the place it would be restored to.';
+      parts.push(row);
+      continue;
+    }
+    Object.assign(row, p.state ? await restoreMeasureState(from) : await restoreMeasureTree(from, p.to));
+    parts.push(row);
+  }
+  if (parts.length) return { ok: true, resolved: root, parts, reason: '' };
+
+  // Nothing recognisable. Landing on the folder the backups go *into* is the likely
+  // mistake, and it is one this can answer rather than just deny — the dated folders are
+  // right there to be listed.
+  let stamps = [];
+  try {
+    stamps = fs.readdirSync(root, { withFileTypes: true })
+      .filter(x => x.isDirectory() && RESTORE_STAMP_RE.test(x.name))
+      .map(x => x.name).sort().reverse().slice(0, 20)
+      .map(name => ({ name, path: path.join(root, name) }));
+  } catch {}
+  return {
+    ok: false, resolved: root, stamps,
+    reason: stamps.length
+      ? 'That is the folder your backups go into, not a backup. Pick one of the dated folders in it.'
+      : 'No input, output, Media or config folder in there — that does not look like a backup.',
+  };
+}
+
+// The run in progress, or the last one. Same shape as the backup's, and polled the same
+// way: a restore over a full library takes as long as the backup did, and a page with no
+// progress on it looks stopped rather than busy.
+let restoreJob = null;
+const restoreState = () => restoreJob && {
+  id: restoreJob.id, state: restoreJob.state, from: restoreJob.from,
+  startedAt: restoreJob.startedAt, endedAt: restoreJob.endedAt, error: restoreJob.error,
+  files: restoreJob.progress.files, bytes: restoreJob.progress.bytes,
+  folder: restoreJob.progress.folder, config: restoreJob.config,
+  log: restoreJob.log.slice(-200).join('\n'),
+};
+
+async function restoreCopyState(from, prog) {
+  for (const [base, to] of Object.entries(restoreStateMap())) {
+    const src = path.join(from, base);
+    let st = null;
+    try { st = await fs.promises.lstat(src); } catch { continue; }
+    if (!st.isFile()) continue;
+    await fs.promises.copyFile(src, to);
+    try { await fs.promises.utimes(to, st.atime, st.mtime); } catch {}
+    prog.files++; prog.bytes += st.size;
+  }
+}
+
+function restoreRun(root, parts, done) {
+  const b = restoreJob = {
+    id: String(Date.now()), state: 'running', from: root, config: false,
+    startedAt: new Date().toISOString(), endedAt: '', error: '',
+    progress: { files: 0, bytes: 0, folder: '' },
+    log: ['=== restore === ' + root],
+  };
+  (async () => {
+    for (const p of parts) {
+      b.progress.folder = p.label;
+      b.log.push('    ' + p.label + ' <- ' + p.from);
+      const was = { files: b.progress.files, bytes: b.progress.bytes };
+      if (p.state) { await restoreCopyState(p.from, b.progress); b.config = true; }
+      else await maintCopyTree(p.from, p.to, b.progress);
+      b.log.push('      ' + (b.progress.files - was.files).toLocaleString('en-US') + ' files, '
+        + maintBytes(b.progress.bytes - was.bytes) + ' -> ' + p.to);
+    }
+    b.progress.folder = '';
+  })().then(() => {
+    if (b.config) {
+      // The two stores that are read from disk per request (workflows, replacements)
+      // need nothing. These two do:
+      //   * config.json is held in the module-level config object and mirrored out.
+      //   * promptIndex is held in memory and written back on a debounce, so a restored
+      //     file would be overwritten by the next save rather than adopted. Re-read on
+      //     the same terms as startup — a version mismatch is discarded there too.
+      reloadConfig();
+      try {
+        const loaded = JSON.parse(fs.readFileSync(PROMPT_INDEX_PATH, 'utf8'));
+        if (loaded && loaded.v === PROMPT_INDEX_VERSION && loaded.files) promptIndex = loaded;
+      } catch {}
+      b.log.push('    settings reloaded -- a restart is still needed for the port and the media root, which are read once at startup');
+    }
+    b.state = 'done';
+    b.endedAt = new Date().toISOString();
+    b.log.push('RESTORE OK -- ' + b.progress.files.toLocaleString('en-US') + ' files, ' + maintBytes(b.progress.bytes));
+    done(null);
+  }).catch(err => {
+    b.state = 'failed';
+    b.endedAt = new Date().toISOString();
+    // Half a restore is a real state and saying so is the whole point: what was copied
+    // before the error is still there, and running it again is safe — it overwrites.
+    b.error = 'The restore failed after ' + b.progress.files.toLocaleString('en-US') + ' files: ' + err.message
+      + ' — what had already been copied is still in place, and running it again resumes over the top.';
+    b.log.push('RESTORE FAILED -- ' + err.message);
+    done(b.error);
+  });
+}
+
 // What we asked the scheduler for, held until the task confirms it by writing a status
 // file with the same id. Without this, a task that never launched — which is exactly what
 // LogonType Interactive does when nobody is signed in — is indistinguishable from one
@@ -2165,6 +2591,20 @@ function maintReadJson(name) {
 let maintPending = null;
 
 function maintJob() {
+  // The backup runs in this process, in front of the task, so nothing has written a
+  // status file yet — and as far as the page is concerned this is one clean with two
+  // phases, not two runs. A failed backup stays the job until the next one starts:
+  // it is the reason the wipe never happened, and it must not be replaced by whatever
+  // the last completed run left in the status file.
+  if (maintBackup && maintBackup.state !== 'done') {
+    return {
+      id: maintBackup.id, kind: 'clean', phase: 'backup',
+      state: maintBackup.state === 'failed' ? 'failed' : 'running',
+      startedAt: maintBackup.startedAt, endedAt: maintBackup.endedAt, exitCode: null,
+      error: maintBackup.error, flags: 'backup → ' + maintBackup.dest,
+      backup: maintBackupState(),
+    };
+  }
   const st = maintReadJson('maintenance-status.json');
   let job = st && st.id ? {
     id: String(st.id), kind: st.kind || '', state: st.state || '',
@@ -2199,6 +2639,9 @@ function maintJob() {
         'h — the task was almost certainly killed. See ' + maintFile('maintenance.log') + '.';
     }
   }
+  // A finished backup belongs to the wipe that followed it: the page states what was
+  // copied and where, beside the run that was safe to start because of it.
+  if (job && maintBackup) job.backup = maintBackupState();
   return job;
 }
 
@@ -2206,8 +2649,12 @@ function maintJob() {
 // page re-reads this every couple of seconds while it runs.
 function maintLog() {
   const t = maintReadText('maintenance.log');
-  if (!t) return '';
-  const lines = t.split(/\r?\n/);
+  let lines = t ? t.split(/\r?\n/) : [];
+  // The backup happened before the task was asked to start, so its lines are not in the
+  // task's log — and that file is deleted on the way to poking it. They are kept here
+  // and put back in front, or the transcript of a run would begin halfway through it.
+  if (maintBackup) lines = maintBackup.log.concat(lines);
+  if (!lines.length) return '';
   return lines.length > 500 ? lines.slice(-500).join('\n') : lines.join('\n');
 }
 
@@ -2253,13 +2700,20 @@ function maintInteractiveUsers(cb) {
 // success and nothing whatsoever runs, leaving the panel waiting on a report
 // that is never coming. Ask first and refuse with a reason, rather than starting
 // something that can only hang.
-function maintStart(kind, params, cb) {
+// Split out from maintStart because a backup has to ask this *first*: spending twenty
+// minutes copying a media library for a wipe that was never going to start is the one
+// way this feature could waste more than it saves.
+function maintCanStart(cb) {
   maintInteractiveUsers(users => {
-    if (Array.isArray(users) && !users.length) {
-      cb({ error: 'Nobody is signed in, and ' + MAINT_TASK + ' needs an interactive session to run. '
-                + 'Sign in at the console or connect over RDP, then try again.' });
-      return;
-    }
+    cb(Array.isArray(users) && !users.length
+      ? 'Nobody is signed in, and ' + MAINT_TASK + ' needs an interactive session to run. '
+        + 'Sign in at the console or connect over RDP, then try again.'
+      : null);
+  });
+}
+function maintStart(kind, params, cb) {
+  maintCanStart(err => {
+    if (err) { cb({ error: err }); return; }
     maintStartNow(kind, params, cb);
   });
 }
@@ -3933,12 +4387,71 @@ runTests();
         task: MAINT_TASK,
         setupScript: 'scripts\\register_maintenance_task.ps1',
         options: MAINT_OPTIONS,
+        modifiers: MAINT_MODIFIERS,
         selection: maintSelection(),
+        // The folder the last run backed up into, so the field is filled in rather than
+        // asking for a path that has not changed since the last time it was typed. What
+        // the copy will cost is not sent: it depends on which rows are ticked right now,
+        // which only the page knows, and it sums the same report rows the totals do.
+        backupDir: config.maintenanceBackupDir || '',
         job: maintJob(),
         log: maintLog(),
         report: maintReadJson('maintenance-report.json'),
       });
     });
+    return;
+  }
+
+  // API: Restore — what is in this folder, and where would each piece go? Read-only:
+  // it stats and walks and creates nothing, which is what lets the page show the
+  // overwrite count before anything is decided.
+  if (pn === '/api/restore/inspect' && req.method === 'GET') {
+    restoreInspect(url.searchParams.get('path'))
+      .then(d => jsonRes(res, d))
+      .catch(err => jsonRes(res, { ok: false, reason: err.message }));
+    return;
+  }
+
+  // API: Restore — how the copy is going. Polled while one runs, for the same reason the
+  // Clean page polls: over a full library this takes as long as the backup did.
+  if (pn === '/api/restore/state' && req.method === 'GET') {
+    jsonRes(res, { job: restoreState() });
+    return;
+  }
+
+  // API: Restore — put the chosen pieces back. Merges and never deletes, so it is safe
+  // to run twice; it still takes an explicit confirmation, because it overwrites.
+  if (pn === '/api/restore' && req.method === 'POST') {
+    let bodyStr = '';
+    req.on('data', c => bodyStr += c);
+    req.on('end', () => {
+      let body = {};
+      if (bodyStr) { try { body = JSON.parse(bodyStr); } catch { jsonRes(res, { error: 'Bad JSON' }, 400); return; } }
+      if (body.confirm !== true) { jsonRes(res, { error: 'Missing confirmation' }, 400); return; }
+      if (restoreJob && restoreJob.state === 'running') { jsonRes(res, { error: 'A restore is already running — wait for it to finish.' }, 409); return; }
+      // Inspected again on what actually arrived. The page has already done this to draw
+      // its list, but that answer is a courtesy: the folder can have changed since, and a
+      // POST need not have come from that page at all.
+      restoreInspect(body.path).then(d => {
+        if (!d.ok) { jsonRes(res, { error: d.reason }, 400); return; }
+        const want = Array.isArray(body.parts) ? body.parts.map(String) : [];
+        const parts = d.parts.filter(p => !p.blocked && p.files > 0 && want.includes(p.key));
+        if (!parts.length) { jsonRes(res, { error: 'Nothing was selected that has anything in it.' }, 400); return; }
+        restoreRun(d.resolved, parts, () => {});
+        jsonRes(res, { started: true, id: restoreJob.id });
+      }).catch(err => jsonRes(res, { error: err.message }, 500));
+    });
+    return;
+  }
+
+  // API: Clean — is this folder somewhere a backup can be written? Read-only: it stats
+  // the path and its parent and creates nothing. Called as the field is typed into, so
+  // the Run button can be disabled with the reason on screen rather than refusing the
+  // click with no explanation — and called again by the run itself, because an answer
+  // the client already has is not a check.
+  if (pn === '/api/maintenance/backup-check' && req.method === 'GET') {
+    const chk = maintBackupCheck(url.searchParams.get('path'));
+    jsonRes(res, chk);
     return;
   }
 
@@ -3957,6 +4470,7 @@ runTests();
         jsonRes(res, { error: 'A clean is already running — wait for it to finish.' }, 409); return;
       }
       if (kind === 'scan') {
+        maintBackup = null;
         maintStart('scan', {}, r => jsonRes(res, r, r.error ? 500 : 200));
         return;
       }
@@ -3966,10 +4480,46 @@ runTests();
       const sel = {};
       for (const o of MAINT_OPTIONS) sel[o.key] = !!(body.selection && body.selection[o.key]);
       if (!maintPicked(sel)) { jsonRes(res, { error: 'Nothing is ticked — there would be nothing to clean.' }, 400); return; }
+      // Checked here and not only in the browser. The page disables Run for a bad path,
+      // but a disabled button is a courtesy and this is the check.
+      const wantsBackup = !!sel.backup;
+      const chk = wantsBackup ? maintBackupCheck(body.backupPath) : null;
+      if (chk && !chk.ok) { jsonRes(res, { error: 'Backup folder: ' + chk.reason }, 400); return; }
       // Remembered on Run, not through some separate Save: the ticks that ran are the
-      // ones worth coming back to.
-      try { maintSaveSelection(sel); } catch (e) { jsonRes(res, { error: 'Could not save the selection: ' + e.message }, 500); return; }
-      maintStart('clean', maintParams(sel), r => jsonRes(res, r, r.error ? 500 : 200));
+      // ones worth coming back to, and so is the folder they ran into.
+      const remember = chk ? chk.resolved
+        : (typeof body.backupPath === 'string' ? body.backupPath.trim().slice(0, 400) : '');
+      try { maintSaveSelection(sel, remember); } catch (e) { jsonRes(res, { error: 'Could not save the selection: ' + e.message }, 500); return; }
+      const params = maintParams(sel);
+      // Whatever the last run left behind stops being this run's story here — including
+      // a failed backup, which is what has been holding the job slot since.
+      maintBackup = null;
+      if (!wantsBackup) { maintStart('clean', params, r => jsonRes(res, r, r.error ? 500 : 200)); return; }
+      // With a backup the two halves are asked in the opposite order to everything else:
+      // can the wipe run at all, *then* copy, then start it. The copy outlives this
+      // request by design — it can take an hour over a full library — so the response
+      // says which phase began and the page follows it through /state like any other run.
+      maintCanStart(err => {
+        if (err) { jsonRes(res, { error: err }, 500); return; }
+        let b;
+        maintRunBackup(chk.resolved, sel, backupErr => {
+          if (backupErr) return;   // the job already says so, and nothing has been deleted
+          maintStartNow('clean', params, r => {
+            // Written onto the backup this start belongs to, and only while it is still
+            // the run on screen: schtasks takes its time, and a second run started in
+            // the meantime must not be handed the first one's failure.
+            if (!r.error || maintBackup !== b) return;
+            // Nobody is listening on the socket any more, so the failure goes where the
+            // page is looking. The files are safe and nothing was deleted; what failed
+            // is the wipe, and it must not read as "cleaned".
+            b.state = 'failed';
+            b.error = 'The backup finished, but the clean could not be started: ' + r.error;
+            b.log.push('CLEAN NOT STARTED -- ' + r.error);
+          });
+        });
+        b = maintBackup;
+        jsonRes(res, { started: true, phase: 'backup', dest: b.dest });
+      });
     });
     return;
   }
