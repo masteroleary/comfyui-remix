@@ -269,6 +269,17 @@ select.rmx-inp{cursor:pointer}
   flex:none;font-size:10px;line-height:1;padding:3px 6px;border-radius:999px;
   background:#3a2a12;color:#ffb340;border:1px solid #5a4020;
 }
+/* Which of the answers the prompt asks for by number — [female][0][1]. Blue
+   rather than the amber of the count it replaces: the count is "this many
+   jobs", and an indexed keyword is the one shape of several answers that costs
+   exactly one. Amber is kept for the half of it that is a mismatch: a
+   reference with no answer behind it, which renders as nothing at all. */
+.rmx-valbtn-ix{
+  flex:none;font-size:10px;line-height:1;padding:3px 6px;border-radius:999px;
+  background:#12233a;color:#64d2ff;border:1px solid #1e3a5c;white-space:nowrap;
+  font-family:ui-monospace,monospace;
+}
+.rmx-valbtn-ix.warn{background:#3a2a12;color:#ffb340;border-color:#5a4020}
 .rmx-valbtn-c{flex:none;color:#8e8e93;font-size:10px}
 /* Catches the click that closes the menu. Fixed and transparent: the menu holds
    real checkboxes, so it cannot close on the button losing focus — reaching a
@@ -298,9 +309,28 @@ select.rmx-inp{cursor:pointer}
 /* The prompt itself, quiet and one line: it is what tells two similarly named
    entries apart, and it is not what you are picking. */
 .rmx-val-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7d7d82;font-size:11.5px}
+/* The number this answer answers to: [female][2] takes the one marked 2. Quiet
+   until the prompt actually names it, because until then it is a fact about the
+   list rather than a fact about the run. */
+.rmx-val-i{
+  flex:none;font-size:10px;line-height:1;padding:3px 5px;border-radius:5px;min-width:16px;text-align:center;
+  background:#2c2c2e;color:#8e8e93;border:1px solid #3a3a3c;font-family:ui-monospace,monospace;
+}
+.rmx-val-i.on{background:#12233a;color:#64d2ff;border-color:#1e3a5c}
 .rmx-repl-swap{padding:6px 9px;color:#0a84ff}
 .rmx-repl-del{width:30px;padding:6px 0;background:#3a1e1e;color:#e06c6c;border:1px solid #5a2a2a;border-radius:8px;cursor:pointer;font-size:12px}
 .rmx-repl-del:hover{border-color:#e06c6c}
+/* What an indexed keyword is doing to this run, stated under the rows rather
+   than left to be inferred from a tab count that did not go up. Its own block
+   per keyword, since the mismatches below the first line are about that
+   keyword's answers and nothing else. */
+.rmx-repl-pin{
+  margin-top:8px;padding:7px 9px;border-radius:8px;font-size:12px;color:#8e8e93;
+  background:#141c26;border:1px solid #1e3a5c;
+}
+.rmx-repl-pin b{color:#64d2ff;font-family:ui-monospace,monospace;font-weight:600}
+.rmx-repl-pin .warn{margin-top:4px;color:#ffb340}
+.rmx-repl-pin .warn b{color:inherit}
 /* Keywords offered under the find box. It hangs out of the row, so it needs to
    sit above the rows below it; the max-height is what keeps a large library
    from pushing the rest of the form off screen. */

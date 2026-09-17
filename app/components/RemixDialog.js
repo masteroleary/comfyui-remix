@@ -23,7 +23,7 @@ import MediaTile from './MediaTile.js';
 import WorkflowFields, { ctype, shortLora, canonLora, loraWords, replaceableText } from './WorkflowFields.js';
 import ReplacementRules from './ReplacementRules.js';
 import { activeReplacements, applyReplacements, applyReplacementsToNodes, loadReplacements,
-  replacementGroups, keptVariations, replacementText } from '../replacements.js';
+  varyingGroupKeys, keptVariations, replacementText } from '../replacements.js';
 import { viewTo } from '../router.js';
 
 const { reactive, ref, computed, watch, onMounted, onUnmounted, provide, inject } = window.Vue;
@@ -1320,8 +1320,11 @@ export default {
       const replText = replaceableText(cfg.fields);
       const variations = keptVariations(replText);
       // Only the keywords with something to choose between get named: a label
-      // repeating every rule in the list would be the same on every job.
-      const multi = new Set(replacementGroups(replText).filter(g => g.live && g.rules.length > 1).map(g => g.key));
+      // repeating every rule in the list would be the same on every job. Which
+      // is the module's question, not this one's — a keyword the prompt pins by
+      // index carries all of its answers in every combination, so "more than
+      // one rule" stopped being the same question as "varies".
+      const multi = varyingGroupKeys(replText);
       const labelFor = (v, n) => (variations.length < 2 ? '' :
         '#' + (n + 1) + '/' + variations.length + ' · ' + v
           .filter(r => multi.has(String(r.from).trim().toLowerCase()))

@@ -31,7 +31,8 @@ import {
   replacements, saveReplacements, replAllOn, isKeywordRule, keywordOf,
 } from '../replacements.js';
 import { applyReplacements, paintReplacements, replacementGroups, replacementVariations,
-  reachableRules, replacementText, isVariationSkipped, setVariationSkipped } from '../replacements.js';
+  reachableRules, replacementText, isVariationSkipped, setVariationSkipped,
+  varyingGroupKeys, isIndexToken } from '../replacements.js';
 import { promptLib, loadPrompts, promptsMatching } from '../prompts.js';
 
 const { computed, ref, onMounted } = window.Vue;
@@ -86,6 +87,20 @@ export default {
     // named. The paragraph below stays on `prompt` — it is the prompt field
     // being previewed, not the whole form.
     const scopeText = computed(() => props.scope || props.prompt || '');
+    // Everything the run has decided about each keyword, worked out once: what
+    // is live, what is pinned by an index, what is left to fan out over. Every
+    // count and colour below reads it from here rather than asking again, which
+    // is what keeps the summary, the rows and the tabs describing one run.
+    //
+    // Empty while the scope is blank — a form that has not loaded is not a
+    // prompt with nothing in it, so nothing is pinned and nothing is ignored
+    // until there is text to judge against.
+    const groupInfo = computed(() => {
+      const m = new Map();
+      if (!scopeText.value.trim()) return m;
+      for (const g of replacementGroups(scopeText.value)) m.set(g.key, g);
+      return m;
+    });
 
     // ── Rows ────────────────────────────────────────────────────────────
     // One row per keyword, one row per free-text rule. Free-text rules are not
@@ -110,16 +125,39 @@ export default {
       });
       return out;
     };
+    // Each answer carries its position in the row, because that position is
+    // what [keyword][n] addresses — the stored order, which is the order the
+    // rules were added and the order a run applies them in. The value menu
+    // lists the library's order instead, so without the number beside each tick
+    // there would be nowhere at all to read which answer is which index.
     const rowsRaw = computed(() => groupsOf().map(row => {
       const r0 = row.rules[0];
-      const picked = row.rules.filter(r => r.promptId).map(r => ({
-        rule: r, id: r.promptId, name: promptName(r.promptId) || oneLine(r.to) || '(missing)',
+      const picked = row.rules.map((rule, n) => ({ rule, n })).filter(p => p.rule.promptId).map(p => ({
+        rule: p.rule, n: p.n, id: p.rule.promptId,
+        name: promptName(p.rule.promptId) || oneLine(p.rule.to) || '(missing)',
       }));
+      // What the prompt asks this keyword for by index. A row nothing addresses
+      // that way is left exactly as it was: bare [keyword], one answer per job.
+      const g = row.keyword ? groupInfo.value.get(foldTok(r0.from)) : null;
+      const indices = (g && g.indices) || [];
+      const answers = row.rules.length;
       return Object.assign(row, {
         from: String(r0.from == null ? '' : r0.from),
         on: row.rules.every(r => r.on),
         picked,
         pickedIds: new Set(picked.map(p => p.id)),
+        pickedAt: new Map(picked.map(p => [p.id, p.n])),
+        indices,
+        pinned: indices.length > 0,
+        // The two ways the prompt and the tick list can disagree, and both are
+        // silent without this: an index with no answer behind it renders as
+        // nothing at all, and an answer no index names simply never appears.
+        // Neither is an error — a keyword being filled in as the prompt is
+        // written passes through both — so they are stated, not blocked.
+        missing: indices.filter(n => n >= answers),
+        unused: indices.length
+          ? row.rules.map((r, n) => n).filter(n => !indices.includes(n))
+          : [],
       });
     }));
     // Which colour each rule's text gets in the preview: its row's, so one
@@ -162,9 +200,14 @@ export default {
     const menuFor = ref('');
     const openMenu = id => { menuFor.value = id; };
     const closeMenu = () => { menuFor.value = ''; };
+    //
+    // The [0] in [female][0] is not on offer: it is an index into the row that
+    // already exists, not a keyword a rule could be written for, and a menu
+    // offering to replace [0] with a prompt is offering to break the reference.
     const promptKeywords = computed(() => {
       const seen = new Map();
       for (const m of String(props.prompt || '').match(PROMPT_TOKEN) || []) {
+        if (isIndexToken(m)) continue;
         const k = foldTok(m);
         if (!seen.has(k)) seen.set(k, { token: m.trim(), count: 0 });
         seen.get(k).count++;
@@ -186,7 +229,7 @@ export default {
       for (const r of reachableRules(scopeText.value)) {
         for (const m of String(replacementText(r)).match(PROMPT_TOKEN) || []) {
           const k = foldTok(m);
-          if (!k || have.has(k) || seen.has(k)) continue;
+          if (!k || isIndexToken(k) || have.has(k) || seen.has(k)) continue;
           seen.set(k, { token: m.trim(), via: String(r.from).trim() });
         }
       }
@@ -201,7 +244,7 @@ export default {
       const seen = new Map();
       const add = tok => {
         const k = foldTok(tok);
-        if (!k || k === '[]' || have.has(k) || seen.has(k)) return;
+        if (!k || k === '[]' || isIndexToken(k) || have.has(k) || seen.has(k)) return;
         seen.set(k, { token: String(tok).trim() });
       };
       for (const c of promptLib.categories) add('[' + String(c == null ? '' : c).trim() + ']');
@@ -316,11 +359,52 @@ export default {
     };
     const valTitle = (row) => {
       const kw = String(row.from).trim();
+      if (row.pinned) {
+        return row.picked.length + ' answer' + (row.picked.length === 1 ? '' : 's') + ' for ' + kw
+          + ', and the prompt asks for ' + ixLabel(row) + ' by index — so they all land in the one'
+          + ' prompt instead of fanning the run out. Click to change.';
+      }
       return row.picked.length
         ? row.picked.length + ' answer' + (row.picked.length === 1 ? '' : 's') + ' for ' + kw
           + (row.picked.length > 1 ? ' — a run queues a job for each' : '') + '. Click to change.'
         : 'Pick what ' + kw + ' is replaced with — tick as many as you like, and a run queues a job for each.';
     };
+    // Whether the index beside each answer is worth showing. One answer with
+    // nothing addressing it by number is a row where the number is noise; the
+    // moment there are two to tell apart, or the prompt has started naming
+    // them, it is the only thing that says which is which.
+    const showIx = row => row.pinned || row.picked.length > 1;
+    const ixLabel = row => (row.indices || []).map(n => '[' + n + ']').join('');
+
+    // ── Pinned by index ─────────────────────────────────────────────────
+    // [female][0] and [female][1] put two answers in one prompt, which is the
+    // opposite of what two ticked answers normally mean — so the panel says so
+    // rather than leaving a keyword with four answers and one job to be worked
+    // out from the tab count. One line per pinned keyword, and the two ways the
+    // prompt and the tick list can disagree get a line of their own each,
+    // because both of them are otherwise only visible as a word that is missing
+    // from a paragraph.
+    const answerName = (row, n) => {
+      const r = row.rules[n];
+      if (!r) return '';
+      return (isKeywordRule(r) && promptName(r.promptId)) || oneLine(replacementText(r)) || '(nothing)';
+    };
+    const pinNotes = computed(() => rows.value.filter(r => r.pinned && rowLive(r)).map(row => {
+      const kw = String(row.from).trim();
+      const warns = [];
+      if (row.missing.length) {
+        warns.push(row.missing.map(n => kw + '[' + n + ']').join(', ')
+          + (row.missing.length === 1 ? ' has no answer ticked, so it is' : ' have no answers ticked, so they are')
+          + ' dropped from the prompt.');
+      }
+      if (row.unused.length) {
+        warns.push(row.unused.map(n => '“' + answerName(row, n) + '”').join(', ')
+          + (row.unused.length === 1 ? ' is ticked but nothing asks for it' : ' are ticked but nothing asks for them')
+          + ' — add ' + row.unused.map(n => kw + '[' + n + ']').join(', ') + ' to use '
+          + (row.unused.length === 1 ? 'it.' : 'them.'));
+      }
+      return { id: row.id, kw, ix: ixLabel(row), n: row.indices.length, warns };
+    }));
 
     // ── One tab per prompt the run will send ────────────────────────────
     // Several answers to one keyword fan a run out, and this preview used to
@@ -413,7 +497,7 @@ export default {
     // dialog would open saying every rule it has is ignored.
     const liveKeys = computed(() => {
       if (!scopeText.value.trim()) return null;
-      return new Set(replacementGroups(scopeText.value).filter(g => g.live).map(g => g.key));
+      return new Set([...groupInfo.value.values()].filter(g => g.live).map(g => g.key));
     });
     const rowReaches = row => !liveKeys.value || liveKeys.value.has(foldTok(row.from));
     const activeRows = computed(() => rows.value.filter(r => rowLive(r) && rowReaches(r)).length);
@@ -473,9 +557,13 @@ export default {
       const n = colorIdx.value.get(r);
       return n == null ? Infinity : n;
     };
+    // A pinned keyword is left out: every one of its answers is in every
+    // combination, so naming them here would put the same four titles on all of
+    // the tabs and say nothing about which tab is which — the very thing the
+    // labels replaced "Prmpt 3" to avoid.
     const picksFor = (v) => {
       const live = reachableRules(scopeText.value, v);
-      return v.filter(r => isKeywordRule(r) && live.has(r))
+      return v.filter(r => isKeywordRule(r) && live.has(r) && !pinnedKeys.value.has(foldTok(r.from)))
         .sort((a, b) => rowAt(a) - rowAt(b))
         .map(r => ({
           i: replacements.indexOf(r), from: String(r.from).trim(),
@@ -484,9 +572,12 @@ export default {
     };
     // Only the groups that vary name a tab. The rules every combination shares
     // are in all of them, so repeating those in each tooltip says nothing about
-    // which tab is which.
-    const varyingKeys = computed(() => new Set(
-      replacementGroups(scopeText.value).filter(g => g.live && g.rules.length > 1).map(g => g.key)
+    // which tab is which — and a pinned keyword shares all of its answers with
+    // every combination, which is why "varies" is one question asked in the
+    // module rather than the same filter written out at each site that needs it.
+    const varyingKeys = computed(() => varyingGroupKeys(scopeText.value));
+    const pinnedKeys = computed(() => new Set(
+      [...groupInfo.value.values()].filter(g => g.pinned).map(g => g.key)
     ));
     const tabs = computed(() => variations.value.map((v, n) => ({
       n,
@@ -542,6 +633,7 @@ export default {
       addRepl, delRow, setFrom, toggleRow, swapRow, toggleReplAll,
       menuFor, openMenu, closeMenu, menuList, chooseKeyword, ruleFor, onFindEsc,
       valFor, openVals, closeVals, valMenu, toggleVal, valLabel, valTitle, oneLine,
+      showIx, ixLabel, pinNotes,
       painted, variations, onPanelToggle,
       tabs, vSel, pickVariation, keptCount, toggleTab, tabTitle,
     };
@@ -566,6 +658,10 @@ export default {
           Shared by the dialog and the inspect page. Write the find as
           <code>[keyword]</code> to replace it with prompts from the library — tick
           as many answers as you like, and a run queues a job for each.
+          Write <code>[keyword][0]</code> and <code>[keyword][1]</code> in the prompt
+          instead to put two of those answers in the <em>same</em> prompt: a keyword
+          addressed by index stops multiplying the run, and each reference takes the
+          answer at that number below.
           Anything left in brackets that no enabled rule claims is dropped before the run.
         </div>
         <!-- Two columns wherever there is room: the rules on the left, what they
@@ -620,7 +716,12 @@ export default {
                 <button type="button" class="rmx-inp rmx-valbtn" :class="{empty: !row.picked.length}"
                         :title="valTitle(row)" @click="openVals(row)">
                   <span class="rmx-valbtn-t">{{ valLabel(row) }}</span>
-                  <span v-if="row.picked.length > 1" class="rmx-valbtn-n">{{ row.picked.length }}</span>
+                  <!-- Which of these answers the prompt asks for by number, and
+                       in amber when it asks for one that isn't there. The count
+                       badge beside it means "this many jobs", which a pinned
+                       keyword no longer does, so it stands down for this one. -->
+                  <span v-if="row.pinned" class="rmx-valbtn-ix" :class="{warn: row.missing.length}">{{ ixLabel(row) }}</span>
+                  <span v-else-if="row.picked.length > 1" class="rmx-valbtn-n">{{ row.picked.length }}</span>
                   <span class="rmx-valbtn-c">▾</span>
                 </button>
                 <!-- A backdrop rather than a blur handler: the menu holds real
@@ -635,10 +736,17 @@ export default {
                     </div>
                     <template v-for="g in valMenu.groups" :key="g.category">
                       <div class="rmx-kwmenu-h">{{ g.category }}</div>
+                      <!-- The index a ticked answer answers to. This menu is in
+                           the library's order and the indices are in the order
+                           the answers were ticked, so without the number here
+                           there is nowhere to read which is which. -->
                       <label v-for="p in g.prompts" :key="p.id" class="rmx-val">
                         <input type="checkbox" :checked="row.pickedIds.has(p.id)" @change="toggleVal(row, p)">
                         <span class="rmx-val-n">{{ p.name || '(unnamed)' }}</span>
                         <span class="rmx-val-t">{{ oneLine(p.text) }}</span>
+                        <span v-if="row.pickedIds.has(p.id) && showIx(row)" class="rmx-val-i"
+                              :class="{on: row.indices.includes(row.pickedAt.get(p.id))}"
+                              :title="row.from + '[' + row.pickedAt.get(p.id) + '] in a prompt takes this one'">{{ row.pickedAt.get(p.id) }}</span>
                       </label>
                     </template>
                     <div v-if="!promptLib.prompts.length" class="rmx-mut" style="padding:8px 10px;font-size:12px">
@@ -652,6 +760,17 @@ export default {
             </div>
             <div v-if="variations.length > 1" class="rmx-mut" style="font-size:12px;margin-top:8px">
               A keyword with several answers is a variation for each — a run queues one job per ticked combination, <b>{{ keptCount }}</b> of <b>{{ variations.length }}</b>.
+            </div>
+            <!-- The keywords the prompt addresses by index. Worth its own block:
+                 four ticked answers and one job is the exact opposite of the
+                 line above, and the prompt is the only other place that says
+                 why. The two mismatches underneath it are the ones that are
+                 otherwise invisible — a reference with nothing behind it, and
+                 an answer nothing asks for, both of which read as a word
+                 quietly missing from the paragraph on the right. -->
+            <div v-for="p in pinNotes" :key="'pin'+p.id" class="rmx-repl-pin">
+              <div><b>{{ p.kw }}{{ p.ix }}</b> — {{ p.n === 1 ? 'one answer' : p.n + ' answers' }} in the one prompt, so {{ p.kw }} doesn’t multiply the run.</div>
+              <div v-for="(w, wi) in p.warns" :key="wi" class="warn">{{ w }}</div>
             </div>
             <button type="button" class="rmx-btn2" style="margin-top:6px" @click="addRepl">＋ Add replacement</button>
           </div>

@@ -265,6 +265,29 @@ Several things about it are load-bearing:
   with the panel shut, and the panel is the control that decides it: the tabs
   directly under it are those twelve prompts, and unticking them is how the
   twelve becomes five.
+- **`[female][0]` and `[female][1]` put two of those answers in one prompt.** The
+  fan-out above is "one of these per job", and there was no way to say "both of
+  these, in this render" — two characters in a scene is the obvious case, and the
+  only way to get it was to stop using the shelf and paste the text. An index
+  addresses the keyword's answers by their position in the row, counting from 0.
+  It is therefore the **opt-out from the multiplication**: a keyword the run's
+  text addresses by index anywhere is *pinned* (`replacementGroups` sets
+  `g.pinned`), its whole answer list rides along in every combination instead of
+  one being chosen from it, and each reference resolves its own. One
+  `[female][0]` is enough to pin it, and a bare `[female]` elsewhere then takes
+  answer 0 rather than re-opening a fan-out the indexed references have already
+  committed to. Reachability decides it against the grown haystack, not the raw
+  text, so a `[hair][1]` arriving inside what `[female]` resolves to pins `[hair]`
+  too. The two ways it can disagree with the tick list are both silent otherwise
+  — `[female][1]` with one answer ticked renders nothing, and a third answer no
+  index names never appears — so the panel states each under the rows, and the
+  index badge on the row goes amber for the first. An index past the end is left
+  in the text rather than blanked here, because the leftover sweep is the only
+  thing that also tidies the comma it was sitting in.
+  `g.varies` (live, not pinned, more than one answer) is the single question
+  every site asks — the job labels, the tab labels, their hovers — through
+  `varyingGroupKeys`, since "more than one rule for this keyword" stopped being
+  the same question the day one of them could be pinned.
 - **`[keyword]` rules resolve first; the literal ones run over what they
   produced.** A literal rule used to run in list order alongside the keywords,
   which meant it saw the prompt as typed — and the prompt as typed says
@@ -314,9 +337,13 @@ Several things about it are load-bearing:
   run reading it never learn that the editor changed shape. A new rule inherits
   the row's switch, so answering a row that is off does not quietly start it
   running, and it is appended rather than spliced in — the stored order is the
-  order a run applies them in. Unticking the last answer leaves the row, waiting
-  to be answered again; deleting the keyword is what the ✕ is for, and it takes
-  every answer with it.
+  order a run applies them in, and the order `[keyword][n]` addresses them by.
+  Each ticked answer therefore carries its number in the menu, lit when the
+  prompt actually asks for it: the menu is in the library's order and the
+  indices are in the order the answers were ticked, so there would otherwise be
+  nowhere at all to read which is which. Unticking the last answer leaves the
+  row, waiting to be answered again; deleting the keyword is what the ✕ is for,
+  and it takes every answer with it.
 - **The colour follows the row, and the row's place on screen.** One keyword is
   one colour however many answers it has, or its dot could only ever show one of
   them. Counted down the rows as displayed rather than as stored, because the

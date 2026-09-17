@@ -30,6 +30,85 @@ export const replActiveCount = computed(() => activeReplacements().length);
 export const replAllOn = computed(() => replacements.length > 0 && replacements.every(r => r.on));
 
 const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const foldFrom = r => String(r && r.from ? r.from : '').trim().toLowerCase();
+
+// ── Indexed keyword references ────────────────────────────────────────────
+// [female][0] and [female][1] in one prompt ask for the first and the second of
+// the answers ticked for [female] — both of them, in the same render — where a
+// bare [female] asks for "one of them" and fans the run out over all of them.
+//
+// So an index is the opt-out from the multiplication rather than an addition to
+// it: a keyword the text addresses by index is PINNED (see replacementGroups),
+// its whole answer list rides along in every combination, and each reference
+// picks its own out of it. Mixing the two forms is not a third thing — one
+// [female][0] anywhere pins the keyword, and a bare [female] elsewhere then
+// resolves to answer 0, because the indexed references have already committed
+// the run to a particular set of answers, and re-opening a fan-out around them
+// would queue N prompts differing in the one word that had just been pinned.
+//
+// Counting from 0, because the only reading that lets [female][0] and
+// [female][1] sit side by side and name two different answers is the one where
+// the first index is 0 — and a scheme where [female][1] is sometimes the first
+// answer and sometimes the second is worse than either.
+//
+// An index with no answer behind it — [female][1] with one answer ticked — is
+// left exactly where it is, and the leftover sweep at the end of
+// applyReplacements deletes it along with the comma it was sitting in. That is
+// deliberate rather than substituting '' here: the sweep is the only thing that
+// tidies the hole a dropped item leaves, and it only runs at all when a bracket
+// survives to trigger it. Blanking it here would leave the ", ," behind.
+const INDEX_ONLY_RE = /^\[\d+\]$/;
+// [0] is a position, not a keyword. The token scanners offer what a rule could
+// be written for, and an index is already part of the token beside it.
+export const isIndexToken = t => INDEX_ONLY_RE.test(String(t == null ? '' : t).trim());
+// Which indices a text addresses a keyword by. Matched exactly as the rules
+// match — literally and case-insensitively — so [Female][2] finds a rule
+// written [female], the same way a bare [Female] would.
+export function indexedUses(text, from) {
+  const kw = String(from == null ? '' : from).trim();
+  if (typeof text !== 'string' || !kw || text.indexOf('[') < 0) return [];
+  const re = new RegExp(escRe(kw) + '\\[(\\d+)\\]', 'gi');
+  const out = new Set();
+  let m;
+  while ((m = re.exec(text)) !== null) out.add(Number(m[1]));
+  return [...out].sort((a, b) => a - b);
+}
+
+// The pattern a rule matches with, and the answer a match names. Both are
+// shared by the substitution and by the preview's second walk of it, because a
+// regex written out twice is a preview that quietly stops being the run.
+//
+// A keyword rule swallows an [n] suffix. Without it [female][1] reads as a bare
+// [female] to replace followed by a stray [1] for the leftover sweep to delete
+// — the wrong answer arriving as a plausible one, since the prompt still comes
+// back looking replaced. Trimmed, and only for a keyword rule: the brackets are
+// the whole of what it finds, so a space around them is a typo rather than part
+// of it — and an untrimmed pattern would also expect that space to sit between
+// the token and its index.
+const ruleRe = r => new RegExp(isKeywordRule(r)
+  ? escRe(String(r.from).trim()) + '(?:\\[(\\d+)\\])?'
+  : escRe(r.from), 'gi');
+// A keyword's answers within one rule list, in stored order — which is the
+// order the indices address them in, and the order the editor lists them in.
+function keywordGroups(rules) {
+  const m = new Map();
+  for (const r of rules) {
+    if (!isKeywordRule(r)) continue;
+    const k = foldFrom(r);
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(r);
+  }
+  return m;
+}
+// Which rule a match resolves to: the n-th answer for [kw][n], the first for a
+// bare [kw], and nothing at all when the index is past the end — the caller
+// then leaves the token where it is for the sweep to clear.
+//
+// A bare token taking the first answer is also exactly what the old first-wins
+// behaviour did with a list carrying several rules for one keyword, which is
+// still the shape a group that cannot fire rides along in.
+const pickFor = (group, n) => (group ? group[n == null ? 0 : Number(n)] : null);
+
 // ── Variations ────────────────────────────────────────────────────────────
 // Two enabled rules that find the same thing used to mean the first one won and
 // the second silently did nothing: by the time it looked, the token it wanted
@@ -53,10 +132,15 @@ const escRe = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // matched, and this deliberately does not — because the direction to be wrong
 // in is "kept a variation that changes nothing", never "dropped one that would
 // have". Same reason a caller with no text to offer gets everything back live.
-export function reachableRules(text, rules) {
+//
+// The haystack it grew is worth keeping as well as the answer: it is every
+// scrap of text this run can reach, which is also the only honest place to look
+// for an indexed reference — see replacementGroups. `hay` is null when there was
+// no text to judge by, which is the same "everything is live" case.
+function reach(text, rules) {
   const list = rules || activeReplacements();
   const live = new Set();
-  if (typeof text !== 'string') { for (const r of list) live.add(r); return live; }
+  if (typeof text !== 'string') { for (const r of list) live.add(r); return { live, hay: null }; }
   let hay = text.toLowerCase();
   for (;;) {
     let grew = false;
@@ -69,9 +153,10 @@ export function reachableRules(text, rules) {
       hay += '\n' + String(replacementText(r)).toLowerCase();
       grew = true;
     }
-    if (!grew) return live;
+    if (!grew) return { live, hay };
   }
 }
+export function reachableRules(text, rules) { return reach(text, rules).live; }
 
 // `text` is what this run is going to rewrite, when the caller knows it: each
 // group is flagged `live` or not, and a group that cannot fire is not a choice
@@ -83,7 +168,7 @@ export function reachableRules(text, rules) {
 // one group and would otherwise both fire on the same token.
 export function replacementGroups(text) {
   const groups = new Map();
-  const live = reachableRules(text);
+  const { live, hay } = reach(text);
   for (const r of activeReplacements()) {
     const k = String(r.from).trim().toLowerCase();
     if (!groups.has(k)) groups.set(k, { key: k, label: String(r.from).trim(), rules: [] });
@@ -91,8 +176,26 @@ export function replacementGroups(text) {
   }
   // One answer per group: its rules all find the same thing, so they are all
   // reachable or none of them are.
-  for (const g of groups.values()) g.live = g.rules.some(r => live.has(r));
+  for (const g of groups.values()) {
+    g.live = g.rules.some(r => live.has(r));
+    // Against the grown haystack rather than the text as given: a [hair][1]
+    // living inside what [female] resolves to reaches this run as surely as one
+    // the prompt said out loud, and pinning from only half of them would leave
+    // the fan-out and the substitution disagreeing about the same token.
+    g.indices = hay == null ? [] : indexedUses(hay, g.label);
+    g.pinned = g.indices.length > 0;
+    // The one question every caller is actually asking: does this group
+    // multiply the run? Live, pinned and unreachable are three different
+    // reasons for the answer, and each site working them out for itself is how
+    // the job labels and the preview tabs end up naming different keywords.
+    g.varies = g.live && !g.pinned && g.rules.length > 1;
+  }
   return [...groups.values()];
+}
+// The keywords with something to choose between, for everything that has to
+// name them: the preview's tabs, their hovers, and the label on each queued job.
+export function varyingGroupKeys(text) {
+  return new Set(replacementGroups(text).filter(g => g.varies).map(g => g.key));
 }
 // Every combination, each a complete rule list. Order inside a list is the order
 // the rules were typed, not the order the grouping happened to visit them:
@@ -109,7 +212,12 @@ export function replacementVariations(text) {
     // applies it and it finds nothing — it just does not multiply the run.
     // Kept rather than dropped because "cannot fire" is judged from the text
     // this surface can see, and the built graph holds text it cannot.
-    if (!g.live) for (const c of combos) next.push(c.concat(g.rules));
+    //
+    // A pinned group rides along whole for the opposite reason: every one of
+    // its answers fires, in the same prompt, at the index that named it. It is
+    // the one case where a list carrying several rules for one keyword is the
+    // point rather than the trap — applyReplacements reads them as a list.
+    if (!g.varies) for (const c of combos) next.push(c.concat(g.rules));
     else for (const c of combos) for (const r of g.rules) next.push(c.concat([r]));
     combos = next;
   }
@@ -119,7 +227,7 @@ export function replacementVariations(text) {
 }
 // How many prompts the rules multiply out to, before anything is unticked.
 export function variationCount(text) {
-  return replacementGroups(text).reduce((n, g) => n * (g.live ? g.rules.length : 1), 1);
+  return replacementGroups(text).reduce((n, g) => n * (g.varies ? g.rules.length : 1), 1);
 }
 
 // ── Leaving one out ───────────────────────────────────────────────────────
@@ -155,7 +263,6 @@ export function variationCount(text) {
 // rules cannot produce simply never matches, which is what makes a stale one
 // harmless rather than something to garbage-collect.
 export const variationSkips = reactive(new Set());
-const foldFrom = r => String(r && r.from ? r.from : '').trim().toLowerCase();
 const ruleKey = r => foldFrom(r) + '=' + ((r && (r.promptId || r.to)) || '');
 const tally = (list) => {
   const n = new Map();
@@ -271,8 +378,24 @@ export function applyReplacements(text, only) {
   const rules = only || activeReplacements();
   const keyworded = rules.filter(isKeywordRule);
   const literal = rules.filter(r => !isKeywordRule(r));
+  // A keyword rule replaces both the bare token and every [kw][n] beside it,
+  // out of the whole group rather than out of itself: the rule that happens to
+  // run first is not the one an index names, and each of a pinned keyword's
+  // answers has to be reachable from whichever of them the sweep reaches first.
+  // The rules after it in the group then find nothing left to do, exactly as
+  // they always have.
+  const groups = keywordGroups(rules);
   let out = text;
-  const apply = r => { out = out.replace(new RegExp(escRe(r.from), 'gi'), () => replacementText(r)); };
+  const apply = r => {
+    if (!isKeywordRule(r)) { out = out.replace(ruleRe(r), () => replacementText(r)); return; }
+    const g = groups.get(foldFrom(r)) || [r];
+    // The capture group only exists on this branch, so `n` is always the index
+    // and never .replace()'s offset argument creeping into its place.
+    out = out.replace(ruleRe(r), (m0, n) => {
+      const pick = pickFor(g, n);
+      return pick ? replacementText(pick) : m0;
+    });
+  };
   const sweepKeywords = () => {
     for (let pass = 0; pass < 4 && keyworded.length && /[[{]/.test(out); pass++) {
       const before = out;
@@ -326,14 +449,35 @@ function paintStep(text, owner, re, replFor) {
 export function paintReplacements(text, only) {
   if (typeof text !== 'string') return null;
   const rules = only || activeReplacements();
+  const groups = keywordGroups(rules);
   let out = text;
   let owner = new Array(text.length).fill(-1);
   // The row index, not the position in the filtered list: that is what the
   // editor colours its rows by, and an off rule in the middle would otherwise
   // shift every colour after it.
+  //
+  // Which rule that is depends on the match for a keyword: [female][1] is the
+  // second answer's colour, sitting beside [female][0] in the first's. So the
+  // colour is worked out per match, from the same pickFor the substitution uses.
   const run = (r) => {
-    const rule = replacements.indexOf(r);
-    const s = paintStep(out, owner, new RegExp(escRe(r.from), 'gi'), () => ({ text: replacementText(r), rule }));
+    if (!isKeywordRule(r)) {
+      const rule = replacements.indexOf(r);
+      const s = paintStep(out, owner, ruleRe(r), () => ({ text: replacementText(r), rule }));
+      out = s.text; owner = s.owner;
+      return;
+    }
+    const g = groups.get(foldFrom(r)) || [r];
+    const src = owner;
+    const s = paintStep(out, owner, ruleRe(r), (m) => {
+      const pick = pickFor(g, m[1]);
+      // An index past the end leaves the token alone, so it keeps whoever put
+      // it there rather than being re-attributed to the rule that declined it.
+      // The leftover sweep below deletes it either way; this only decides which
+      // colour the deletion is credited to.
+      return pick
+        ? { text: replacementText(pick), rule: replacements.indexOf(pick) }
+        : { text: m[0], rule: src[m.index] == null ? -1 : src[m.index] };
+    });
     out = s.text; owner = s.owner;
   };
   // The same two phases as applyReplacements, in the same order. This walk is

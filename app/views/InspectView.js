@@ -32,7 +32,7 @@ import { launchJob, cancelJob, jobs, link, presetFromEmbedded, outputItems, forg
   promptAlternatives } from '../components/RemixDialog.js';
 import ReplacementRules from '../components/ReplacementRules.js';
 import WorkflowFields, { replaceableText } from '../components/WorkflowFields.js';
-import { keptVariations, replacementGroups, replacementText, applyReplacements } from '../replacements.js';
+import { keptVariations, varyingGroupKeys, replacementText, applyReplacements } from '../replacements.js';
 
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = window.Vue;
 const { useRoute, useRouter } = window.VueRouter;
@@ -738,7 +738,9 @@ export default {
       const replText = replaceableText(cfgNow.fields);
       // Ticked tabs only — an unticked one is a job that was never asked for.
       const variations = keptVariations(replText);
-      const multi = new Set(replacementGroups(replText).filter(g => g.live && g.rules.length > 1).map(g => g.key));
+      // The same question the dialog asks, from the same place: a keyword the
+      // prompt pins by index is in every combination whole, so it names nothing.
+      const multi = varyingGroupKeys(replText);
       const labelFor = (v, n) => (variations.length < 2 ? '' :
         '#' + (n + 1) + '/' + variations.length + ' · ' + v
           .filter(r => multi.has(String(r.from).trim().toLowerCase()))
