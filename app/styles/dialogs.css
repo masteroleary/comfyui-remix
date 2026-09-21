@@ -322,6 +322,13 @@
 .auth-min{font-size:12px;color:var(--amber);margin-top:2px}
 .auth-foot{font-size:12px;color:var(--text3);margin-top:12px}
 .auth-set{color:var(--green);font-weight:400}
+/* The duress password. Ruled off from the gate above it because the two read as one
+   block otherwise, and this half does the opposite of letting somebody in. */
+.purge-block{margin-top:22px;padding-top:18px;border-top:1px solid var(--border)}
+.purge-warn{
+  font-size:13px;color:var(--red);border:1px solid var(--red);
+  border-radius:var(--r-sm);padding:10px;margin-bottom:12px;
+}
 
 /* ── Folder picker (server-side browse) ── */
 .picker-sheet{

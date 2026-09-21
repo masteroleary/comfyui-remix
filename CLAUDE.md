@@ -805,6 +805,50 @@ Optional, off by default (`config.auth`). Implemented entirely in server.js as a
 - The Security page detects a server with no `security` block in `/api/settings` and refuses to pretend: pre-gate builds answer `ok:true` to a password save and drop it, which looks exactly like success.
 - Minimum length is 7, enforced in both `/api/settings` (`AUTH_MIN_LEN`) and the Security page, which keeps the enable toggle disabled until a long-enough password exists.
 
+## Purge password (duress)
+
+Optional second password on the lock screen (`config.auth.purgeHash`, Settings →
+Security). It lets nobody in: `/api/auth/login` answers it with the identical
+`401 {ok:false}` a wrong password gets, and starts a full clean behind the
+response. Set and stored exactly as the app password is — same scrypt, same
+minimum, same "only the hash" rule — and cleared along with it, because a hash
+left behind re-arms a duress password nobody remembers the day a new password is
+set.
+
+- **It is checked only after the real password has missed.** Which makes the
+  degenerate case safe by construction: set both to the same string and the real
+  one simply wins. Safe, but silent — a duress password that can never fire is
+  the one failure this cannot have — so `purgeConflict` refuses that save, in
+  front of the whole settings write because answering it needs a scrypt round
+  against the stored hash.
+- **The response comes first, the purge after it.** Two scrypt rounds either way,
+  so a wrong password and the purge password cost the same and say the same. Only
+  the correct password is distinguishable, and that one reloads the page.
+- **The selection is fixed in `PURGE_SELECTION`, not read from
+  `config.maintenanceSelection`.** Those ticks are whatever was last run from the
+  Clean page, and the common case there is caches-only — a duress password that
+  clears two browser caches and leaves the library behind. So every row that
+  names something to delete is on, plus `closeBrowsers` (the cache files are
+  locked while the browser runs) and `trim`, and never `backup`: a purge that
+  first spends an hour copying the library into a folder on the same desk is not
+  a purge. **It therefore reaches the `Originals` rows too** — the source clips
+  and the LoRA datasets, which are not regenerable.
+- **It goes through `maintStartNow`, not `maintStart`.** The interactive-session
+  check exists to hand a person a reason, and the browser that asked for this has
+  already been told it typed the wrong password. So it pokes the task regardless
+  and logs the outcome to the server console (`[Purge] …`). It inherits Clean's
+  standing limitation: no `ComfyRemixMaintenance` task, or nobody signed in, and
+  nothing is deleted — silently, which is what the Security tab says up front.
+  A clean already running is left to it, and a second entry inside five minutes
+  is ignored, since the lock screen checks per keystroke.
+- **`Origin` still applies.** `sameOriginOk` runs before the login route, so a
+  page on another site cannot fire this at `127.0.0.1` — the same reason that
+  guard exists at all.
+- **The hash is visible in config.json**, beside the app password's, and is not
+  cleared after firing (once-and-then-silently-never-again is worse). So the file
+  states that a second password exists, and the Security tab says so rather than
+  implying a deniability it does not have.
+
 ## Remote access hardening (optional)
 
 The app binds `0.0.0.0` but is intended to stay private. To reach it from other devices without exposing it to the LAN or the public internet, put it behind a mesh VPN such as **Tailscale**: block inbound 8080/8443 at the firewall except from **localhost** and your **VPN address ranges**, and enable the VPN's unattended mode so the machine is reachable after a cold reboot before login. Step-by-step client + firewall setup is in the [README](README.md#accessing-it-privately-over-tailscale).

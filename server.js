@@ -123,7 +123,11 @@ const AUTH_MIN_LEN = 7;       // mirrored in the Settings panel, which won't arm
 function authState() {
   const a = (config.auth && typeof config.auth === 'object') ? config.auth : {};
   const hash = typeof a.hash === 'string' ? a.hash : '';
-  return { enabled: !!a.enabled && !!hash, hasPassword: !!hash, hash };
+  // The duress password (see startPurge). Only meaningful while the gate is on and a
+  // real password exists, so it is reported as absent otherwise rather than left as a
+  // hash the login route might still reach.
+  const purgeHash = (!!hash && typeof a.purgeHash === 'string') ? a.purgeHash : '';
+  return { enabled: !!a.enabled && !!hash, hasPassword: !!hash, hash, purgeHash, hasPurge: !!purgeHash };
 }
 function hashPassword(pw) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -138,6 +142,20 @@ function verifyPassword(pw, stored, cb) {
   if (!want.length) { cb(false); return; }
   crypto.scrypt(String(pw), parts[1], want.length, (err, dk) =>
     cb(!err && dk.length === want.length && crypto.timingSafeEqual(dk, want)));
+}
+// Refuse a purge password that is also the real one. Ordering in /api/auth/login makes
+// that harmless — the real password is checked first and wins — but harmless is the
+// problem: it is a duress password that silently never fires. Checked against the
+// plaintext when both arrive in the same save, and against the stored hash when only
+// the purge half is being set, which is why this is a callback and the whole settings
+// save waits on it.
+function purgeConflict(body, cb) {
+  const pp = body.purgePassword;
+  if (typeof pp !== 'string' || pp === '') { cb(false); return; }
+  if (typeof body.authPassword === 'string' && body.authPassword !== '') { cb(body.authPassword === pp); return; }
+  const st = authState();
+  if (!st.hasPassword) { cb(false); return; }
+  verifyPassword(pp, st.hash, cb);
 }
 const sessionSig = (exp, hash) =>
   crypto.createHmac('sha256', 'ComfyRemix/session/' + hash).update(String(exp)).digest('hex').slice(0, 32);
@@ -2744,6 +2762,50 @@ function maintStartNow(kind, params, cb) {
   });
 }
 
+// ── The duress password ────────────────────────────────────────────────────
+// A second password on the lock screen that answers exactly as a wrong one does —
+// same 401, same silence, same shake — and starts a full clean on its way out. It is
+// the Clean page's run with nobody watching it, so it goes through the same request
+// file and the same scheduled task; there is deliberately no second delete path.
+//
+// The selection is fixed here rather than read from config.maintenanceSelection. Those
+// ticks are whatever was last run from the Clean page, and the common case there is
+// caches-only: a duress password that clears two browser caches and leaves the library
+// is the one failure this cannot have. Every row that names something to delete is on,
+// plus the two modifiers that make the deletion reach — close a running browser so its
+// cache files are not locked open, and ReTrim afterwards, which is what makes the
+// blocks unrecoverable rather than merely unlinked.
+//
+// Never `backup`: a purge that first spends an hour copying the library into a folder
+// on the same desk is not a purge.
+const PURGE_SELECTION = Object.fromEntries(
+  MAINT_OPTIONS.filter(o => o.key !== 'backup').map(o => [o.key, true]));
+
+// The login box checks per keystroke, so the password arrives once but a retype or a
+// second device could arrive again mid-run. One poke is enough; a second would delete
+// the status file the first run is writing into.
+let purgeFiredAt = 0;
+function startPurge(why) {
+  const now = Date.now();
+  if (now - purgeFiredAt < 5 * 60 * 1000) return;
+  purgeFiredAt = now;
+  console.log('[Purge] ' + why);
+  const running = maintJob();
+  if (running && (running.state === 'running' || running.state === 'starting')) {
+    console.log('[Purge] a clean is already running (' + running.id + ') — left to it');
+    return;
+  }
+  // maintStartNow, not maintStart: the interactive-session check exists to hand a
+  // person a reason, and there is no person to hand it to — the browser that asked for
+  // this has already been told it typed the wrong password. Poked anyway, so that a run
+  // which *can* start does. With nobody signed in the task does nothing and says
+  // nothing, which is the standing limitation of the whole Clean feature.
+  maintBackup = null;
+  maintStartNow('clean', maintParams(PURGE_SELECTION), r => {
+    console.log('[Purge] ' + (r.error ? 'could not start: ' + r.error : 'started ' + MAINT_TASK + ' as ' + r.id));
+  });
+}
+
 // A dropped connection must never be fatal. This server proxies ComfyUI over both
 // HTTP and WebSocket, streams SSE to browsers, and serves range requests for large
 // video — all of which produce socket errors as normal traffic when a client
@@ -2843,12 +2905,27 @@ const server = http.createServer((req, res) => {
       // concurrent burst through the throttle entirely. A success clears it.
       noteAuthAttempt(ip);
       authInFlight++;
-      verifyPassword(String(body.password || ''), st.hash, ok => {
+      const pw = String(body.password || '');
+      verifyPassword(pw, st.hash, ok => {
         authInFlight--;
-        if (!ok) { jsonRes(res, { ok: false }, 401); return; }
-        authFails.delete(ip);
-        setSessionCookie(req, res, makeSession(st.hash));
-        jsonRes(res, { ok: true });
+        if (ok) {
+          authFails.delete(ip);
+          setSessionCookie(req, res, makeSession(st.hash));
+          jsonRes(res, { ok: true });
+          return;
+        }
+        // The duress password, checked only once the real one has missed — so if the
+        // two were ever set to the same string the real one simply wins and nothing is
+        // deleted. It answers with the identical 401 the line above would have sent,
+        // and the purge goes on its way after the response rather than before it: this
+        // must not take longer, or read differently, than any other wrong password.
+        if (!st.purgeHash) { jsonRes(res, { ok: false }, 401); return; }
+        authInFlight++;
+        verifyPassword(pw, st.purgeHash, hit => {
+          authInFlight--;
+          jsonRes(res, { ok: false }, 401);
+          if (hit) startPurge('the purge password was entered from ' + ip);
+        });
       });
     });
     return;
@@ -3894,8 +3971,14 @@ runTests();
       },
       setup: { done: !!config.setupDone, features: Array.isArray(config.features) ? config.features : null },
       privacy: { mediaCachePolicy: MEDIA_CACHE[config.mediaCachePolicy] ? config.mediaCachePolicy : 'nostore' },
-      // The hash itself never leaves the server — only whether one exists.
-      security: { enabled: authState().enabled, hasPassword: authState().hasPassword },
+      // The hash itself never leaves the server — only whether one exists. Same for
+      // the duress password, and this is the only route that says so at all:
+      // /api/auth/status is reachable while locked, and "a purge password is set" is
+      // exactly the sentence that must not be readable from in front of the gate.
+      security: {
+        enabled: authState().enabled, hasPassword: authState().hasPassword,
+        hasPurgePassword: authState().hasPurge, purgeSupported: process.platform === 'win32',
+      },
     });
     return;
   }
@@ -3905,70 +3988,89 @@ runTests();
     req.on('end', () => {
       let body;
       try { body = JSON.parse(bodyStr); } catch { jsonRes(res, { error: 'Bad JSON' }, 400); return; }
-      let current = {};
-      try { current = readConfigFile(); } catch {}
-      // Secret keys: null clears, non-empty string sets, '' / undefined leaves unchanged.
-      for (const k of ['civitaiApiKey']) {
-        if (!(k in body)) continue;
-        if (body[k] === null) current[k] = '';
-        else if (typeof body[k] === 'string' && body[k].trim() !== '') current[k] = body[k].trim();
-      }
-      // Media cache policy. Whitelisted, never echoed straight into a header:
-      // this value ends up in Cache-Control, so an unchecked string would be a
-      // header-injection hole.
-      if (typeof body.mediaCachePolicy === 'string' && MEDIA_CACHE[body.mediaCachePolicy]) {
-        current.mediaCachePolicy = body.mediaCachePolicy;
-      }
-      // URLs: any provided string is applied (empty falls back to default on reload).
-      for (const k of ['comfyUrl']) {
-        if (typeof body[k] === 'string') current[k] = body[k].trim();
-      }
-      // Paths: must exist on disk. comfyDir additionally warns (not blocks) if it
-      // doesn't look like a ComfyUI install (no user/default/workflows inside).
-      let warning = null;
-      for (const k of ['comfyDir', 'comfyOutput']) {
-        if (typeof body[k] !== 'string' || body[k].trim() === '') continue;
-        const p = path.resolve(body[k].trim());
-        let st = null;
-        try { st = fs.statSync(p); } catch {}
-        if (!st || !st.isDirectory()) { jsonRes(res, { error: k + ': folder does not exist: ' + p }, 400); return; }
-        if (k === 'comfyDir' && !fs.existsSync(path.join(p, 'user', 'default', 'workflows'))) {
-          warning = 'comfyDir has no user/default/workflows inside — workflow features will find nothing until ComfyUI creates it.';
+      // Asked before anything is written, because the answer can need a scrypt round
+      // against the stored hash: a purge password that is also the real password is
+      // one that can never fire, so it is refused rather than saved.
+      purgeConflict(body, clash => {
+        if (clash) { jsonRes(res, { error: 'The purge password must be different from the app password' }, 400); return; }
+        let current = {};
+        try { current = readConfigFile(); } catch {}
+        // Secret keys: null clears, non-empty string sets, '' / undefined leaves unchanged.
+        for (const k of ['civitaiApiKey']) {
+          if (!(k in body)) continue;
+          if (body[k] === null) current[k] = '';
+          else if (typeof body[k] === 'string' && body[k].trim() !== '') current[k] = body[k].trim();
         }
-        current[k] = p;
-      }
-      // Password gate. Only the scrypt hash is ever written. Saving a password
-      // re-keys every session (the signing key derives from the hash), so the
-      // caller is handed a fresh cookie in this same response — otherwise turning
-      // protection on would immediately lock out the browser that turned it on.
-      let newSession = null;
-      if ('authPassword' in body || 'authEnabled' in body) {
-        const auth = (current.auth && typeof current.auth === 'object') ? Object.assign({}, current.auth) : {};
-        if ('authPassword' in body) {
-          if (body.authPassword === null) { auth.hash = ''; auth.enabled = false; }   // clearing it also unlocks the app
-          else if (typeof body.authPassword === 'string' && body.authPassword !== '') {
-            if (body.authPassword.length < AUTH_MIN_LEN) { jsonRes(res, { error: 'Password must be at least ' + AUTH_MIN_LEN + ' characters' }, 400); return; }
-            auth.hash = hashPassword(body.authPassword);
+        // Media cache policy. Whitelisted, never echoed straight into a header:
+        // this value ends up in Cache-Control, so an unchecked string would be a
+        // header-injection hole.
+        if (typeof body.mediaCachePolicy === 'string' && MEDIA_CACHE[body.mediaCachePolicy]) {
+          current.mediaCachePolicy = body.mediaCachePolicy;
+        }
+        // URLs: any provided string is applied (empty falls back to default on reload).
+        for (const k of ['comfyUrl']) {
+          if (typeof body[k] === 'string') current[k] = body[k].trim();
+        }
+        // Paths: must exist on disk. comfyDir additionally warns (not blocks) if it
+        // doesn't look like a ComfyUI install (no user/default/workflows inside).
+        let warning = null;
+        for (const k of ['comfyDir', 'comfyOutput']) {
+          if (typeof body[k] !== 'string' || body[k].trim() === '') continue;
+          const p = path.resolve(body[k].trim());
+          let st = null;
+          try { st = fs.statSync(p); } catch {}
+          if (!st || !st.isDirectory()) { jsonRes(res, { error: k + ': folder does not exist: ' + p }, 400); return; }
+          if (k === 'comfyDir' && !fs.existsSync(path.join(p, 'user', 'default', 'workflows'))) {
+            warning = 'comfyDir has no user/default/workflows inside — workflow features will find nothing until ComfyUI creates it.';
           }
+          current[k] = p;
         }
-        if ('authEnabled' in body) {
-          if (body.authEnabled && !auth.hash) { jsonRes(res, { error: 'Set a password before turning on password protection' }, 400); return; }
-          auth.enabled = !!body.authEnabled;
+        // Password gate. Only the scrypt hash is ever written. Saving a password
+        // re-keys every session (the signing key derives from the hash), so the
+        // caller is handed a fresh cookie in this same response — otherwise turning
+        // protection on would immediately lock out the browser that turned it on.
+        let newSession = null;
+        if ('authPassword' in body || 'authEnabled' in body || 'purgePassword' in body) {
+          const auth = (current.auth && typeof current.auth === 'object') ? Object.assign({}, current.auth) : {};
+          if ('authPassword' in body) {
+            // Clearing the password takes the purge password with it. The gate is off
+            // now, so it cannot fire anyway — and leaving the hash behind means a new
+            // password set months later silently re-arms a duress password nobody
+            // remembers typing.
+            if (body.authPassword === null) { auth.hash = ''; auth.enabled = false; auth.purgeHash = ''; }
+            else if (typeof body.authPassword === 'string' && body.authPassword !== '') {
+              if (body.authPassword.length < AUTH_MIN_LEN) { jsonRes(res, { error: 'Password must be at least ' + AUTH_MIN_LEN + ' characters' }, 400); return; }
+              auth.hash = hashPassword(body.authPassword);
+            }
+          }
+          // The duress password: same storage, same scrypt, same minimum. null clears it.
+          if ('purgePassword' in body) {
+            if (body.purgePassword === null) auth.purgeHash = '';
+            else if (typeof body.purgePassword === 'string' && body.purgePassword !== '') {
+              if (body.purgePassword.length < AUTH_MIN_LEN) { jsonRes(res, { error: 'Purge password must be at least ' + AUTH_MIN_LEN + ' characters' }, 400); return; }
+              if (!auth.hash) { jsonRes(res, { error: 'Set an app password before setting a purge password' }, 400); return; }
+              auth.purgeHash = hashPassword(body.purgePassword);
+            }
+          }
+          if ('authEnabled' in body) {
+            if (body.authEnabled && !auth.hash) { jsonRes(res, { error: 'Set a password before turning on password protection' }, 400); return; }
+            auth.enabled = !!body.authEnabled;
+          }
+          current.auth = auth;
+          if (auth.enabled && auth.hash) newSession = makeSession(auth.hash);
         }
-        current.auth = auth;
-        if (auth.enabled && auth.hash) newSession = makeSession(auth.hash);
-      }
-      // Setup wizard state: completion flag + which features the user opted into.
-      if ('setupDone' in body) current.setupDone = !!body.setupDone;
-      if (Array.isArray(body.features)) {
-        const known = ['media', 'comfy'];
-        current.features = body.features.filter(f => known.includes(f));
-      }
-      try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(current, null, 2)); }
-      catch (e) { jsonRes(res, { error: 'Write failed: ' + e.message }, 500); return; }
-      reloadConfig();
-      if (newSession) setSessionCookie(req, res, newSession);
-      jsonRes(res, warning ? { ok: true, warning } : { ok: true });
+        // Setup wizard state: completion flag + which features the user opted into.
+        if ('setupDone' in body) current.setupDone = !!body.setupDone;
+        if (Array.isArray(body.features)) {
+          const known = ['media', 'comfy'];
+          current.features = body.features.filter(f => known.includes(f));
+        }
+        try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(current, null, 2)); }
+        catch (e) { jsonRes(res, { error: 'Write failed: ' + e.message }, 500); return; }
+        reloadConfig();
+        if (newSession) setSessionCookie(req, res, newSession);
+        jsonRes(res, warning ? { ok: true, warning } : { ok: true });
+      });
     });
     return;
   }

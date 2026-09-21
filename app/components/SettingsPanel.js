@@ -78,6 +78,15 @@ export default {
         clear: false,       // "Remove password" armed; applied on Save
         editing: false,     // "Change" clicked: show the boxes over a stored password
         placeholder: 'Choose a password',
+        // The duress password — same three controls over again, because it is set,
+        // changed and removed exactly as the real one is. What differs is only what it
+        // does, and that is the blurb's job.
+        hasPurge: false,
+        purgeSupported: true,
+        purgePw: '', purgePw2: '',
+        purgeClear: false,
+        purgeEditing: false,
+        purgePlaceholder: 'Choose a purge password',
       },
       picker: { open: false, target: '' },
       // Restore from a backup folder. Three steps, and the middle one is the point:
@@ -111,6 +120,14 @@ export default {
       s.auth.pw = '';
       s.auth.pw2 = '';
       s.auth.placeholder = 'Choose a password';
+      s.auth.hasPurge = !!sec.hasPurgePassword;
+      // Absent on a build that predates this, where `legacy` above already covers it.
+      s.auth.purgeSupported = sec.purgeSupported !== false;
+      s.auth.purgeClear = false;
+      s.auth.purgeEditing = false;
+      s.auth.purgePw = '';
+      s.auth.purgePw2 = '';
+      s.auth.purgePlaceholder = 'Choose a purge password';
     }
     function apply(st) {
       for (const f of KEY_FIELDS) {
@@ -221,6 +238,30 @@ export default {
     }
     // Typing a new one countermands the removal.
     const authTyped = () => { if (s.auth.clear) s.auth.clear = false; };
+
+    // ── The purge password ──
+    // Offered only once there is a real password to hide behind: with the gate off the
+    // lock screen never appears, so there is nowhere to type this and nothing it could
+    // do. `usable` is the same test the toggle above uses.
+    const purgeStored = computed(() => !s.auth.purgeClear && s.auth.hasPurge);
+    const purgeTyped = computed(() => s.auth.purgePw.length);
+    const purgeEditing = computed(() => !purgeStored.value || s.auth.purgeEditing);
+    const purgeMinHint = computed(() => {
+      if (!(purgeEditing.value && purgeTyped.value > 0 && purgeTyped.value < AUTH_MIN_LEN)) return '';
+      const n = AUTH_MIN_LEN - purgeTyped.value;
+      return n + ' more character' + (n === 1 ? '' : 's');
+    });
+    function purgeChange() {
+      s.auth.purgeEditing = true;
+      s.auth.purgePlaceholder = 'New purge password';
+    }
+    function purgeRemove() {
+      s.auth.purgeClear = true;
+      s.auth.purgeEditing = false;
+      s.auth.purgePw = '';
+      s.auth.purgePw2 = '';
+    }
+    const purgeTypedIn = () => { if (s.auth.purgeClear) s.auth.purgeClear = false; };
 
     // ── Restart ──
     // The server answers, then goes. So the fetch resolving is not the finish line and a
@@ -380,6 +421,20 @@ export default {
         if (pw.length < AUTH_MIN_LEN) { showToast('Password must be at least ' + AUTH_MIN_LEN + ' characters'); return; }
         payload.authPassword = pw;
       }
+      // The purge password, on the same terms — with one extra confirmation, because
+      // this is the only field in the panel whose next use deletes everything and the
+      // one that can be typed by accident at a lock screen months from now.
+      const ppw = s.auth.purgePw, ppw2 = s.auth.purgePw2;
+      if (s.auth.purgeClear) payload.purgePassword = null;
+      else if (ppw !== '' || ppw2 !== '') {
+        if (ppw !== ppw2) { showToast('The two purge passwords don’t match'); return; }
+        if (ppw.length < AUTH_MIN_LEN) { showToast('Purge password must be at least ' + AUTH_MIN_LEN + ' characters'); return; }
+        // Caught here as well as on the server: the server can only compare against a
+        // hash, and it cannot tell "same as the one you are setting in this same save".
+        if (ppw === pw) { showToast('The purge password must be different from the app password'); return; }
+        if (!window.confirm('Set the purge password?\n\nTyped at the lock screen it will look like a wrong password and let nobody in — and it will delete ComfyUI’s input, output and temp folders, this app’s media library, the source clips and LoRA datasets, the thumbnail and browser caches, the Recycle Bin and the shadow copies.\n\nThere is no undo and no backup is taken.')) return;
+        payload.purgePassword = ppw;
+      }
       // Never save over state we failed to read. Every field here defaults to
       // "off"/"empty", so a save from an unloaded panel doesn't leave settings
       // untouched — it actively writes those defaults: the gate goes off and the
@@ -416,17 +471,34 @@ export default {
             return;
           }
         }
+        // Same read-back for the purge half, and for the same reason: a build without
+        // it answers ok:true and drops the key, and a duress password that was never
+        // stored is worse than none — it is one somebody believes in.
+        if ('purgePassword' in payload) {
+          const got = after && after.security;
+          if (!got || !!got.hasPurgePassword !== (payload.purgePassword !== null)) {
+            showToast('Purge password not saved — this server needs a restart to support it', 6000);
+            return;
+          }
+        }
         // The shell shows its logout control off store.authEnabled.
         api.authStatus().then(a => { store.authEnabled = !!(a && a.enabled); }).catch(() => {});
         // Setting or removing a password keeps the panel open: the tab changes
         // shape when it lands (boxes out, toggle in), and closing over the top of
         // that hides the only confirmation there is.
-        if (after && 'authPassword' in payload) {
+        if (after && ('authPassword' in payload || 'purgePassword' in payload)) {
           applySecurity(after);
           store.settings = after;
-          showToast(payload.authPassword === null ? '✓ Password removed'
-            : after.security.enabled ? '✓ Password set — protection is on'
-              : '✓ Password saved — tick “Require a password” to switch it on', 4500);
+          const said = [];
+          if ('authPassword' in payload) {
+            said.push(payload.authPassword === null ? 'Password removed'
+              : after.security.enabled ? 'Password set — protection is on'
+                : 'Password saved — tick “Require a password” to switch it on');
+          }
+          if ('purgePassword' in payload) {
+            said.push(payload.purgePassword === null ? 'Purge password removed' : 'Purge password set');
+          }
+          showToast('✓ ' + said.join(' · '), 4500);
           return;
         }
         showToast(d.warning ? '⚠ Saved — ' + d.warning : '✓ Settings saved', d.warning ? 5000 : 2200);
@@ -463,6 +535,7 @@ export default {
       keyInput, keyClear, pathState, browse, pickerSeed, picked,
       nsfwSorted, addTag, removeTag,
       stored, usable, editing, minHint, authChange, authRemove, authTyped,
+      purgeStored, purgeEditing, purgeMinHint, purgeChange, purgeRemove, purgeTypedIn,
       save, close, restartServer,
       RESTORE_TARGET, restoreBusy, restorePicked, restoreTotals,
       restoreInspect, runRestore, restoreClear, fmtNum, fmtBytes,
@@ -699,7 +772,8 @@ export default {
             <button class="set-btn btn-cancel" @click="authRemove">Remove</button>
           </div>
           <div v-if="s.auth.clear" class="auth-note">
-            The password will be removed — and protection switched off — when you save.
+            The password will be removed — and protection switched off — when you save.<span v-if="s.auth.hasPurge">
+            The purge password goes with it.</span>
           </div>
 
           <!-- autocomplete=off throughout: these are not sign-in fields, and
@@ -726,6 +800,62 @@ export default {
             Changing or removing the password signs out every device, including this one — this browser is signed
             back in automatically when you save. If you forget it, clear <code>auth</code> in config.json on the
             server and restart.
+          </div>
+
+          <!-- ── The purge password ──
+               Only offered once there is a real password: with the gate off there is no
+               lock screen, so there would be nowhere to type this. -->
+          <div v-if="usable && !s.auth.legacy" class="purge-block">
+            <div class="set-sec">Purge password</div>
+            <div class="set-blurb">
+              A second password that lets nobody in. Typed at the lock screen it answers exactly as a wrong
+              password does — same refusal, same shake, nothing said — and starts a full clean behind it:
+              ComfyUI’s input, output and temp folders, this app’s media library, the source clips and LoRA
+              datasets, the Explorer and browser caches, the recent-items trail, the Recycle Bin and the shadow
+              copies, then a ReTrim so the blocks are gone rather than merely unlinked.
+            </div>
+            <div class="purge-warn">
+              There is no undo, no confirmation and no backup — the Clean page’s ticks are ignored and everything
+              is on. Set this only if you would rather lose all of it than have it read.
+            </div>
+            <div v-if="!s.auth.purgeSupported" class="auth-warn">
+              This server isn’t running Windows, and the clean it would start is a Windows scheduled task —
+              the password would refuse the login and delete nothing.
+            </div>
+            <div v-else class="auth-foot">
+              It runs the same job the Clean page runs, so it needs the <code>ComfyRemixMaintenance</code> task
+              registered and somebody signed in at the console or over RDP — Settings → Clean says whether both
+              are true. With neither, the password still refuses the login and nothing is deleted.
+              The hash is stored in config.json beside the app password, so anyone reading that file can see
+              that a second password exists.
+            </div>
+
+            <div v-if="purgeStored" class="auth-status">
+              <span>Purge password <span class="auth-set">✓ set</span></span>
+              <button v-if="!s.auth.purgeEditing" class="set-btn btn-cancel" @click="purgeChange">Change</button>
+              <button class="set-btn btn-cancel" @click="purgeRemove">Remove</button>
+            </div>
+            <div v-if="s.auth.purgeClear" class="auth-note">
+              The purge password will be removed when you save.
+            </div>
+
+            <div v-if="purgeEditing">
+              <div class="set-field">
+                <label>Purge password</label>
+                <div class="set-row">
+                  <input type="password" autocomplete="off" :placeholder="s.auth.purgePlaceholder"
+                         v-model="s.auth.purgePw" @input="purgeTypedIn">
+                </div>
+                <div v-if="purgeMinHint" class="auth-min">{{ purgeMinHint }}</div>
+              </div>
+              <div class="set-field">
+                <label>Confirm purge password</label>
+                <div class="set-row">
+                  <input type="password" autocomplete="off" placeholder="Type it again"
+                         v-model="s.auth.purgePw2">
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 

@@ -9,7 +9,8 @@
   "civitaiApiKey": "",
   "auth": {
     "enabled": false,
-    "hash": ""
+    "hash": "",
+    "purgeHash": ""
   },
   "comfyTemp": "",
   "dockerContainer": "",
