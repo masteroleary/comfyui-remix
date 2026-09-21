@@ -8,13 +8,27 @@
 // before the round trip. The server's copy wins once it answers — it is the one
 // shared across devices.
 import { api } from './api.js';
-import { promptTextById } from './prompts.js';
+import { promptTextById, promptCategoryById } from './prompts.js';
 
 const { reactive, computed } = window.Vue;
 
 export const replacements = reactive([]);
 
-const plain = () => replacements.map(r => ({ from: r.from, to: r.to, on: !!r.on, promptId: r.promptId || '' }));
+// `autoOff` and `autoKeep` ride along with `on`, and have to. autoOff records
+// which rows were switched off *for* the user rather than *by* them; autoKeep
+// is the opposite, a row switched back on by hand that the mask must not take
+// again. Without them a reload finds a list of switched-off rules with nothing
+// saying they were ever coming back — the difference between a mask and a
+// silent edit to every workflow on the install.
+//
+// The server has to carry both through its own sanitizer or they never reach
+// disk, which is exactly what happened the first time: see the map in
+// /api/replacements.
+const plain = () => replacements.map(r => ({
+  from: r.from, to: r.to, on: !!r.on, promptId: r.promptId || '',
+  ...(r.autoOff ? { autoOff: true } : {}),
+  ...(r.autoKeep ? { autoKeep: true } : {}),
+}));
 
 export function saveReplacements() {
   try { localStorage.setItem('archiveReplacements', JSON.stringify(plain())); } catch (e) {}
@@ -108,6 +122,82 @@ function keywordGroups(rules) {
 // behaviour did with a list carrying several rules for one keyword, which is
 // still the shape a group that cannot fire rides along in.
 const pickFor = (group, n) => (group ? group[n == null ? 0 : Number(n)] : null);
+// A composite row's parts, joined. Written once because the substitution and
+// the preview's second walk of it both need the identical string: the painter
+// self-checks against applyReplacements, so a drift here would not error — it
+// would silently drop every colour in the preview.
+const joinParts = g => g.map(x => String(replacementText(x)).trim()).filter(Boolean).join(', ');
+// What a rule actually substitutes, or nothing.
+//
+// Nothing matters: a rule with a find but no answer yet — which is exactly what
+// the editor's auto-add creates the moment a prompt mentions an unknown keyword
+// — used to replace its token with '' right here, and the leftover sweep at the
+// end only runs when a bracket survives to trigger it. So "a, [mother], b"
+// resolved to "a, , b" where having no rule at all gave "a, b", and a prompt
+// whose keyword is not answered yet is the common case, not the edge one.
+// Leaving the token alone hands it back to STRIP_STEPS, which removes it AND
+// the comma it was sitting in.
+const textOrNothing = r => String(replacementText(r) || '').trim() && replacementText(r);
+
+// ── Composite rows: answers that are parts, not alternatives ──────────────
+// Every other row means "one of these per job". A [promptN] row means the
+// opposite: its answers are the pieces of one figure — a Female, a Hair, an
+// Age, an Outfit — and they join into a single replacement. Six ticks there is
+// one prompt, not six jobs, which is the whole reason the row exists.
+//
+// What still multiplies is **two answers from the same shelf**. A second Hair
+// is another version of this figure where a Hair and an Outfit are two parts of
+// the same one, so the category is what tells a variation from a part. That
+// makes the library's filing load-bearing rather than cosmetic, which it very
+// nearly already was — promptsMatching has always used it to decide what a
+// keyword is asking for.
+//
+// Keyed on the token shape rather than a flag on the rule: the name is what the
+// capture button writes and what anyone composing by hand types, and a row that
+// behaves differently needs to say so in the one place always on screen.
+// A separator no category can contain, so a row key and a shelf key can
+// never collide by accident.
+const PART_SEP = '\u001f';
+export const COMPOSITE_RE = /^\s*\[prompt\d+\]\s*$/i;
+export const isCompositeRule = r => COMPOSITE_RE.test((r && r.from) || '');
+// Which set of alternatives a rule belongs to. For an ordinary row that is the
+// row — its answers are alternatives to each other. For a composite row it is
+// the row *and the shelf*, so only same-shelf answers compete.
+//
+// Exported because the tab labels and the job labels both have to name what
+// varies, and "the row" stopped being the answer to that.
+// An unknown category — the library has not loaded yet, or the entry behind
+// this answer has been deleted — falls back to the answer itself rather than
+// to one shared empty shelf. Sharing one would read every part of a figure as
+// an alternative to every other part, and queue N one-part jobs where there is
+// one whole figure. A shelf per answer joins them, which is both the safe
+// direction and what the row looks like once the library arrives.
+export const pickKeyOf = (r) => {
+  if (!isCompositeRule(r)) return foldFrom(r);
+  const cat = promptCategoryById(r && r.promptId).trim().toLowerCase();
+  return foldFrom(r) + PART_SEP + (cat || '#' + ((r && (r.promptId || r.to)) || ''));
+};
+// The parts of a composite group, in stored order within each shelf.
+const partsOf = (rules) => {
+  const m = new Map();
+  for (const r of rules) {
+    const k = pickKeyOf(r);
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(r);
+  }
+  return m;
+};
+// Every way to build the figure: one answer from each shelf. Cartesian, so two
+// Hairs against one Outfit is two, not three.
+const partCombos = (parts) => {
+  let out = [[]];
+  for (const list of parts.values()) {
+    const next = [];
+    for (const c of out) for (const r of list) next.push(c.concat([r]));
+    out = next;
+  }
+  return out;
+};
 
 // ── Variations ────────────────────────────────────────────────────────────
 // Two enabled rules that find the same thing used to mean the first one won and
@@ -170,7 +260,7 @@ export function replacementGroups(text) {
   const groups = new Map();
   const { live, hay } = reach(text);
   for (const r of activeReplacements()) {
-    const k = String(r.from).trim().toLowerCase();
+    const k = foldFrom(r);
     if (!groups.has(k)) groups.set(k, { key: k, label: String(r.from).trim(), rules: [] });
     groups.get(k).rules.push(r);
   }
@@ -178,24 +268,47 @@ export function replacementGroups(text) {
   // reachable or none of them are.
   for (const g of groups.values()) {
     g.live = g.rules.some(r => live.has(r));
+    g.composite = g.rules.some(isCompositeRule);
+    // Its answers grouped into the shelves they came off. One entry per shelf
+    // for an ordinary row, which is the row itself — so everything below can
+    // read `parts` without asking which kind it is.
+    g.parts = g.composite ? partsOf(g.rules) : new Map([[g.key, g.rules]]);
     // Against the grown haystack rather than the text as given: a [hair][1]
     // living inside what [female] resolves to reaches this run as surely as one
     // the prompt said out loud, and pinning from only half of them would leave
     // the fan-out and the substitution disagreeing about the same token.
-    g.indices = hay == null ? [] : indexedUses(hay, g.label);
+    //
+    // Never a composite row: an index picks one answer out of a list of
+    // alternatives, and a composite row's answers are not alternatives. It
+    // joins them all, which is what an index would have been asking for.
+    g.indices = hay == null || g.composite ? [] : indexedUses(hay, g.label);
     g.pinned = g.indices.length > 0;
+    // How many prompts this group multiplies the run by. One for an ordinary
+    // row per answer; for a composite row, one per way of building the figure,
+    // which is the product across its shelves and usually 1.
+    g.factor = g.live && !g.pinned
+      ? [...g.parts.values()].reduce((n, list) => n * list.length, 1)
+      : 1;
     // The one question every caller is actually asking: does this group
-    // multiply the run? Live, pinned and unreachable are three different
-    // reasons for the answer, and each site working them out for itself is how
-    // the job labels and the preview tabs end up naming different keywords.
-    g.varies = g.live && !g.pinned && g.rules.length > 1;
+    // multiply the run? Live, pinned, unreachable and composite are four
+    // different reasons for the answer, and each site working them out for
+    // itself is how the job labels and the preview tabs end up disagreeing.
+    g.varies = g.factor > 1;
   }
   return [...groups.values()];
 }
-// The keywords with something to choose between, for everything that has to
-// name them: the preview's tabs, their hovers, and the label on each queued job.
-export function varyingGroupKeys(text) {
-  return new Set(replacementGroups(text).filter(g => g.varies).map(g => g.key));
+// What actually has something to choose between, for everything that has to
+// name it: the preview's tabs, their hovers, and the label on each queued job.
+// Pick keys rather than group keys — on a composite row only the shelf with two
+// answers on it is a choice, and naming the row would name its other five parts
+// as well, in every tab, identically.
+export function varyingPickKeys(text) {
+  const out = new Set();
+  for (const g of replacementGroups(text)) {
+    if (!g.varies) continue;
+    for (const [k, list] of g.parts) if (list.length > 1) out.add(k);
+  }
+  return out;
 }
 // Every combination, each a complete rule list. Order inside a list is the order
 // the rules were typed, not the order the grouping happened to visit them:
@@ -217,7 +330,13 @@ export function replacementVariations(text) {
     // its answers fires, in the same prompt, at the index that named it. It is
     // the one case where a list carrying several rules for one keyword is the
     // point rather than the trap — applyReplacements reads them as a list.
+    //
+    // So does a composite row, and always: its answers are the parts of one
+    // figure, so a combination carries one from each shelf rather than one from
+    // the row. partCombos is that cartesian, and for the usual row — one answer
+    // per shelf — it is a single list holding all of them.
     if (!g.varies) for (const c of combos) next.push(c.concat(g.rules));
+    else if (g.composite) for (const c of combos) for (const pick of partCombos(g.parts)) next.push(c.concat(pick));
     else for (const c of combos) for (const r of g.rules) next.push(c.concat([r]));
     combos = next;
   }
@@ -227,7 +346,7 @@ export function replacementVariations(text) {
 }
 // How many prompts the rules multiply out to, before anything is unticked.
 export function variationCount(text) {
-  return replacementGroups(text).reduce((n, g) => n * (g.varies ? g.rules.length : 1), 1);
+  return replacementGroups(text).reduce((n, g) => n * g.factor, 1);
 }
 
 // ── Leaving one out ───────────────────────────────────────────────────────
@@ -263,17 +382,21 @@ export function variationCount(text) {
 // rules cannot produce simply never matches, which is what makes a stale one
 // harmless rather than something to garbage-collect.
 export const variationSkips = reactive(new Set());
-const ruleKey = r => foldFrom(r) + '=' + ((r && (r.promptId || r.to)) || '');
+const ruleKey = r => pickKeyOf(r) + '=' + ((r && (r.promptId || r.to)) || '');
+// Counted per set of alternatives rather than per row: a composite row puts one
+// answer from every shelf it holds into a combination, so tallying by row would
+// read all six as "this row appears six times" and throw away the one shelf that
+// actually chose - which is the only thing making this tab this tab.
 const tally = (list) => {
   const n = new Map();
-  for (const r of list) n.set(foldFrom(r), (n.get(foldFrom(r)) || 0) + 1);
+  for (const r of list) n.set(pickKeyOf(r), (n.get(pickKeyOf(r)) || 0) + 1);
   return n;
 };
 export const variationKey = (list) => {
   const here = tally(list || []);
   const all = tally(activeReplacements());
   return (list || [])
-    .filter(r => here.get(foldFrom(r)) === 1 && (all.get(foldFrom(r)) || 0) > 1)
+    .filter(r => here.get(pickKeyOf(r)) === 1 && (all.get(pickKeyOf(r)) || 0) > 1)
     .map(ruleKey).join('\u0001');
 };
 // An empty key is a combination with nothing chosen in it — the only one there
@@ -389,11 +512,27 @@ export function applyReplacements(text, only) {
   const apply = r => {
     if (!isKeywordRule(r)) { out = out.replace(ruleRe(r), () => replacementText(r)); return; }
     const g = groups.get(foldFrom(r)) || [r];
+    // A composite row joins its list instead of picking out of it — the list is
+    // already one answer per shelf, because replacementVariations picked it that
+    // way. Comma and a space, because a prompt is a comma-separated list and
+    // that is what every other step here assumes; an answer carrying its own
+    // punctuation still lands right, since STRIP_STEPS collapses ", ,".
+    //
+    // The first rule of the row does the whole replacement and the rest then
+    // find nothing left to match, exactly as they do for an ordinary row.
+    if (isCompositeRule(r)) {
+      const joined = joinParts(g);
+      // An unanswered composite is the same story as an unanswered keyword:
+      // give the token back rather than blanking it, so the sweep clears the
+      // comma it was sitting in.
+      out = out.replace(ruleRe(r), m0 => joined || m0);
+      return;
+    }
     // The capture group only exists on this branch, so `n` is always the index
     // and never .replace()'s offset argument creeping into its place.
     out = out.replace(ruleRe(r), (m0, n) => {
       const pick = pickFor(g, n);
-      return pick ? replacementText(pick) : m0;
+      return (pick && textOrNothing(pick)) || m0;
     });
   };
   const sweepKeywords = () => {
@@ -468,14 +607,27 @@ export function paintReplacements(text, only) {
     }
     const g = groups.get(foldFrom(r)) || [r];
     const src = owner;
+    // A composite row's join is credited to the row's first rule, which is not
+    // a compromise: colours are handed out per ROW, so every part of it would
+    // be painted the same colour whichever of them was named.
+    if (isCompositeRule(r)) {
+      const joined = joinParts(g);
+      const rule = replacements.indexOf(g[0]);
+      const c = paintStep(out, owner, ruleRe(r), m => (joined
+        ? { text: joined, rule }
+        : { text: m[0], rule: src[m.index] == null ? -1 : src[m.index] }));
+      out = c.text; owner = c.owner;
+      return;
+    }
     const s = paintStep(out, owner, ruleRe(r), (m) => {
       const pick = pickFor(g, m[1]);
       // An index past the end leaves the token alone, so it keeps whoever put
       // it there rather than being re-attributed to the rule that declined it.
       // The leftover sweep below deletes it either way; this only decides which
       // colour the deletion is credited to.
-      return pick
-        ? { text: replacementText(pick), rule: replacements.indexOf(pick) }
+      const t = pick && textOrNothing(pick);
+      return t
+        ? { text: t, rule: replacements.indexOf(pick) }
         : { text: m[0], rule: src[m.index] == null ? -1 : src[m.index] };
     });
     out = s.text; owner = s.owner;

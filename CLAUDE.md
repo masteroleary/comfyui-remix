@@ -210,27 +210,35 @@ Several things about it are load-bearing:
   against `applyReplacements` and returns `null` on any disagreement; the editor
   then shows the plain string. The tidy-up steps live in one `STRIP_STEPS` table
   both walks read, for the same reason.
-- **The preview is one tab per prompt the run will send, not just the first.**
-  A run fans out over the variations below, and until they were tabs the other
-  prompts could not be read anywhere — they arrived as images. Each tab is a
-  line, and its label is what that combination picked: the title each
-  `[keyword]` resolved to, in the colour of the row that put it there, which is
-  the colour those words then appear in in the paragraph underneath. *Large
-  Adult · Luscious Brunette · Tiny Female · Small Tan* is a prompt you can pick
-  out of a list of twelve; *Prmpt 7* is only not *Prmpt 6*. The titles run in the
-  order the keyword rows are listed beside them, not the order the rules are
-  stored: reading down the rows and along a tab give the same sequence, which is
-  also the order the palette runs in. One per line for the
-  same reason — eleven titles do not fit beside eleven more — and the stack
-  scrolls rather than pushing the paragraph off screen. The keyword is on the
-  hover, not in the label: it is already on the row, and repeated in front of
-  every title it is a column of noise. A combination that picked nothing falls
-  back to its number, or its tab would be an empty line. The tabs are counted
-  against the prompt on screen, so a group it cannot reach does not open a row
-  of tabs holding the identical paragraph. Two tabs reading the same is not a
-  bug when the run will also queue both — a keyword only one variation
-  introduces does that, and identical labels are the plainest way that has ever
-  been visible.
+- **The preview shows every prompt the run will send, in full.** It was a
+  strip of titles that selected which single paragraph appeared underneath, so
+  reading the second prompt was a click and comparing two was a click each way
+  — and the titles were a shorter copy of something already on screen in the
+  only form that matters, the words themselves in the colour of the row that put
+  them there. Each block now carries its own two controls, the box that decides
+  whether it runs and the ＋ that saves it as a keyword of its own, so there is
+  no selection left to make and no index to clamp when unticking an answer
+  collapses six prompts into three. Every prompt carries its own ＋, the
+  single-variation case included, which is why there is no loose save button
+  anywhere. The titles survive as the hover.
+  The prompts are counted against the text on screen, so a group the run cannot
+  reach does not open a row of identical paragraphs. Two of them reading the
+  same is not a bug when the run will also queue both — a keyword only one
+  variation introduces does that, and two identical paragraphs are the plainest
+  way that has ever been visible.
+  **Only while the panel is open.** It is a `<details>`, which hides its body
+  with CSS rather than removing it, and both hosts keep the Run tab mounted — so
+  every variation was applied, painted and turned into DOM before anything had
+  been clicked, on a tab that was not even showing. Four rows of four answers is
+  256 paragraphs built for nobody. `resolved` returns nothing unless
+  `panelOpen`, the body is behind a `v-if`, and `keptCount` comes straight off
+  `variations` so the collapsed summary keeps its number without painting
+  anything. `paintReplacements` runs first and the text is taken from its spans,
+  because it already runs `applyReplacements` internally for its self-check —
+  asking for both ran the pipeline three times per variation. And the column
+  reads `previewVariations`, a copy that lags the rules by 200 ms: a keystroke
+  in a find box used to repaint every paragraph, which was one when there was
+  one and is N now.
 - **Each tab is ticked, and unticking one leaves that prompt out of the run.**
   Three keywords with three answers each is 27 jobs, and it is usually five of
   them that were wanted; the tabs are where those five can be picked, since they
@@ -251,6 +259,76 @@ Several things about it are load-bearing:
   rather than refusing the click: a checkbox bound to a value that did not
   change has already been visibly emptied by the browser, and Vue has no reason
   to repaint it.
+- **A tab can be saved as a keyword of its own, which is how two of them stand
+  side by side.** `＋` on a tab files that tab's resolved paragraph in the prompt
+  library under **Captured** as `promptN`, and adds a rule `[promptN]` pointing
+  at it — so *`[prompt1]` sits across from `[prompt2]`* renders two different
+  figures in one image. The keywords underneath cannot do that: `[female]`
+  appearing twice in one prompt resolves to the same answer both times, and the
+  shelves it pulls in behind it (`[hair]`, `[age]`, `[outfit]`) resolve once for
+  the pair — so the two women come out identical. A capture is taken *after* all
+  of that has happened, which is the whole of why it works.
+  It is **two objects on purpose**: the entry holds the text and stays editable
+  on the Prompts page, and the rule carries its id like any `[keyword]` rule, so
+  a capture edited there updates every use. What keeps it still is that it is one
+  answer to a keyword nothing else names — it cannot fan out and cannot pick
+  differently next run, so it costs no extra jobs.
+  The number is counted across the library **and** the rules, not just the
+  library: deleting a captured entry from the Prompts page leaves its rule
+  behind, and reusing that number would point two rows at one token, where the
+  second would silently never fire. An identical capture already on the shelf is
+  handed back rather than filed twice — and if no rule still points at it, it
+  gets its rule back instead, since deleting a `[promptN]` row and pressing ＋
+  again otherwise filed the same paragraph under a new number.
+  The save is **awaited**, and the rule only follows once the entry is really on
+  disk: `savePrompts` is a whole-list replace and `loadPrompts` marks the library
+  loaded even when the fetch failed, so a capture saved on top of that would post
+  one entry as the entire library. It refuses on `!loaded || error` and says so.
+- **A capture in play switches the rows it was made from off.** A capture is the
+  paragraph *after* every keyword under it resolved, so once the prompt is built
+  out of `[prompt1]` and `[prompt2]` the rows they came from are not ingredients
+  any more — they are rules that cannot reach this run, listed above the two that
+  can. They are switched off and folded behind one line naming the capture
+  responsible. **On *and* reached, never merely on**: a capture is added enabled,
+  so keying this on the tick box alone would fire the instant the first tab was
+  captured — switching off the very `[female]` whose second tab was about to be
+  captured, and collapsing the tabs under the cursor.
+  The switch-off is written, and the rules list is **global**, so `autoOff` is
+  written beside `on` (and carried by `plain()`, or a reload would find a list of
+  switched-off rules with nothing saying they were coming back). It marks the
+  rows *this* did: leaving the state restores exactly those, so a row switched
+  off by hand beforehand stays off. Ticking one by hand records the opposite —
+  **autoKeep** — which the mask skips and which deliberately outlives the
+  masking, because the case it exists for is the next swing: take the capture
+  out of the prompt and put it back, and without it the row goes straight off
+  again. Only switching that row off retires it. Counted in rows rather than
+  rules, like every other count in the panel.
+  A capture only masks if it **resolves to something**. Auto-add creates an
+  empty row for any bracketed token a prompt carries, so a file merely
+  mentioning [prompt1] manufactured a capture that substituted nothing and
+  switched off every rule anyway — deleting the row un-masked, the next panel
+  open re-added it, round and round. Auto-add now skips the [promptN] shape
+  outright, and isLiveCapture asks for text as well as for on-and-reachable.
+- **A `[promptN]` row's answers are parts, not alternatives.** Every other row
+  means "one of these per job". A composite row means the opposite: its answers
+  are the pieces of one figure — a Female, a Hair, an Age, an Outfit — and they
+  join into a single replacement, comma-separated. Six ticks is one prompt.
+  What still multiplies is **two answers off the same shelf**: a second Hair is
+  another version of this figure where a Hair and an Outfit are two parts of the
+  same one, so the library's **category** is what tells a variation from a part.
+  That makes the filing load-bearing rather than cosmetic — which it nearly was
+  already, since `promptsMatching` has always used it to decide what a keyword is
+  asking for.
+  So `pickKeyOf` is the row for an ordinary rule and the row *and shelf* for a
+  composite one, and it is what everything naming a choice now reads:
+  `varyingPickKeys` (tab labels, their hovers, the job labels on both run sites)
+  and `variationKey`'s tally. Keying those on the row read a composite's six
+  answers as "this row appears six times" and threw away the one shelf that
+  actually chose. `replacementGroups` carries `parts` for both kinds — one entry
+  per shelf, or one entry that is the row — and `factor`, the product across
+  them, so `varies` is one question with four possible reasons behind it.
+  An index never applies to a composite row: `[kw][0]` picks one out of a list of
+  alternatives, and joining them all is what that would have been asking for.
 - **Several enabled rules for one keyword are variations, not a queue.** The
   first used to win and the rest silently did nothing — by the time the second
   looked, the token had already been replaced. Now `replacementVariations()`
@@ -357,6 +435,25 @@ Several things about it are load-bearing:
   last so a new one does not jump away from the button that made it. The sort is
   taken when the panel opens and held: sorting live moved the row out from under
   the cursor as its keyword was typed.
+- **A keyword the prompt has and the rules do not gets a row on arrival.** A
+  prompt saying `[mother]` against a list with no `[mother]` in it is a keyword
+  swept out of the graph before the run with nothing on screen having mentioned
+  it — and renaming a row is how you get there without noticing: `[prompt1]`
+  becomes `[mother]` in the prompt, the old row still reads `[prompt1]`, and the
+  new word answers to nothing. So arriving at the Run tab, or opening the panel,
+  adds an empty row per token the text carries, named in a toast since they are
+  appended to a list that is sorted and may be scrolled.
+  Only what the text says out loud: a keyword reached through another rule
+  (`[female]` → "…, `[hair]`, …") already fires and is already offered under
+  *pulled in by a rule*, so a prompt saying `[female]` does not sprout six rows
+  for the shelves behind it. Index tokens are positions, not keywords, and are
+  skipped.
+  It is gated on an `active` prop — both hosts keep every tab mounted
+  (`v-show`), so there is no mount to hang "arriving here" on — and that gate is
+  also what makes it safe rather than a row per keystroke: the prompt field is
+  on the Workflow tab and this panel on the Run tab, so a keyword being typed is
+  never seen half-finished here, and `[moth`, `[mothe`, `[mother]` cannot become
+  three rows.
 - **The find box offers the keywords rather than asking you to remember them** —
   the ones this prompt actually contains first, since only a rule for one of
   those changes this run; then the ones a rule *pulls in*, each labelled with the

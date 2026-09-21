@@ -1650,6 +1650,10 @@ const WF_STORE_PATH = path.join(__dirname, 'app-workflows.json');
 // of a seeded row later leaves every rule that picked it pointing where it was.
 const PROMPTS_PATH = path.join(__dirname, 'app-prompts.json');
 const REPL_PATH = path.join(__dirname, 'app-replacements.json');
+// Strip C0 controls from anything headed for the shared stores. pickKeyOf on
+// the client joins a rule find to a library category with a control character
+// and relies on neither side containing one; trim() does not remove them.
+const noCtl = v => String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, '');
 const SEED_PATH = path.join(__dirname, 'seed.json');
 
 // seed.json, parsed. Read per call rather than held: it is touched once on a
@@ -4145,7 +4149,22 @@ runTests();
         .filter(r => r && typeof r === 'object')
         // promptId links a {keyword} rule to a prompt in the library; "to" is the
         // text it resolved to when it was picked, and the fallback if it is gone.
-        .map(r => ({ from: String(r.from || ''), to: String(r.to || ''), on: !!r.on, promptId: String(r.promptId || '') })) : [];
+        //
+        // autoOff / autoKeep are the capture mask's memory, and they have to
+        // survive this map or the mask becomes a one-way door: it switches rules
+        // off across the whole install and the record of which ones it did —
+        // the only thing that can put them back — is dropped on the way to disk.
+        // Written only when true, so a rule nothing has masked stays the same
+        // four keys it has always been.
+        //
+        // C0 controls are stripped because pickKeyOf joins a rule's find to a
+        // library category with a control character and relies on neither of
+        // pasted control character would collide two different keys into one.
+        .map(r => ({
+          from: noCtl(r.from), to: noCtl(r.to), on: !!r.on, promptId: noCtl(r.promptId),
+          ...(r.autoOff ? { autoOff: true } : {}),
+          ...(r.autoKeep ? { autoKeep: true } : {}),
+        })) : [];
       try {
         fs.writeFileSync(REPL_PATH, JSON.stringify({ replacements: list }, null, 2));
         jsonRes(res, { ok: true });
@@ -4172,11 +4191,11 @@ runTests();
       // sends all of it, so a lost row is a visible lost row rather than a merge
       // that silently resurrects something deleted elsewhere.
       const categories = Array.isArray(body.categories)
-        ? [...new Set(body.categories.map(c => String(c || '').trim()).filter(Boolean))]
+        ? [...new Set(body.categories.map(c => noCtl(c).trim()).filter(Boolean))]
         : seededPrompts().categories;
       const prompts = Array.isArray(body.prompts) ? body.prompts
         .filter(p => p && typeof p === 'object')
-        .map(p => ({ id: String(p.id || ''), name: String(p.name || '').trim(), category: String(p.category || '').trim(), text: String(p.text || '') }))
+        .map(p => ({ id: noCtl(p.id), name: noCtl(p.name).trim(), category: noCtl(p.category).trim(), text: String(p.text == null ? '' : p.text) }))
         .filter(p => p.name || p.text) : [];
       try {
         fs.writeFileSync(PROMPTS_PATH, JSON.stringify({ categories, prompts }, null, 2));

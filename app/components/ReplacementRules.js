@@ -32,10 +32,69 @@ import {
 } from '../replacements.js';
 import { applyReplacements, paintReplacements, replacementGroups, replacementVariations,
   reachableRules, replacementText, isVariationSkipped, setVariationSkipped,
-  varyingGroupKeys, isIndexToken } from '../replacements.js';
-import { promptLib, loadPrompts, promptsMatching } from '../prompts.js';
+  varyingPickKeys, pickKeyOf, isCompositeRule, isIndexToken } from '../replacements.js';
+import { promptLib, loadPrompts, promptsMatching, savePrompts, newPromptId } from '../prompts.js';
+import { showToast } from '../store.js';
 
-const { computed, ref, onMounted } = window.Vue;
+const { computed, ref, onMounted, onBeforeUnmount, watch } = window.Vue;
+
+// ── Capturing a variation ─────────────────────────────────────────────────
+// A tab is one fully resolved prompt, and saving it turns that paragraph into a
+// token of its own: [prompt1], filed in the library and given a rule that
+// substitutes it. Which is what lets two of them stand side by side —
+// "[prompt1] sits across from [prompt2]" — where the keywords underneath cannot,
+// because [female] resolving twice in one prompt resolves to the same answer
+// both times and the shelves it pulls in behind it resolve once for the pair.
+//
+// Frozen is the point, but not by copying: the rule carries the library entry's
+// id like any [keyword] rule, so the capture stays editable on the Prompts page
+// and every use of it follows. What makes it stable is that it is a single
+// answer to a keyword nothing else names — it cannot fan out, and it cannot pick
+// differently on the next run.
+const CAPTURE_CATEGORY = 'Captured';
+// The number out of a captured LIBRARY ENTRY name, which has no brackets.
+// Whether a RULE is a capture is isCompositeRule and nothing else: this used
+// to be a second regex with the brackets optional, so a free-text rule whose
+// find was the bare word "prompt1" masked the whole list while never being
+// joined as a composite — the writer of the name and the reader of it
+// governed by different patterns.
+const CAPTURE_NUM_RE = /^\[?prompt(\d+)\]?$/i;
+
+// What the panel is, on the ⓘ beside its title rather than in a paragraph at
+// the top of the body. It is four sentences that do not change, sitting above
+// the rows they describe and pushing the first one down every time the panel is
+// opened — read once, then in the way. On the title so it is reachable with the
+// panel shut, which is when "what is this" is actually being asked.
+//
+// Broken into lines here rather than left as one run: a title attribute wraps
+// where the browser decides, and this is long enough for that to come out as a
+// wall. Plain text, so no <code> — a tooltip renders none of it.
+const HELP = [
+  'Applied to the prompt right before each run (case-insensitive, all matches).',
+  'Shared by the dialog and the inspect page.',
+  '',
+  'Write the find as [keyword] to replace it with prompts from the library —',
+  'tick as many answers as you like, and a run queues a job for each.',
+  '',
+  'Write [keyword][0] and [keyword][1] in the prompt instead to put two of those',
+  'answers in the same prompt: a keyword addressed by index stops multiplying the',
+  'run, and each reference takes the answer at that number below.',
+  '',
+  'Anything left in brackets that no enabled rule claims is dropped before the run.',
+].join('\n');
+
+// What auto-add will take from a file it did not write. The text it scans is
+// whatever the open file's fields hold, so these are the bounds on a prompt
+// arriving from somewhere else: a token longer than a keyword plausibly is,
+// and a run of them longer than anyone typed on purpose.
+const MAX_AUTO_TOKEN = 40;
+const MAX_AUTO_ADD = 8;
+// Long enough that a burst of typing lands as one repaint, short enough that
+// the preview still reads as a response to the edit rather than a reload.
+const PREVIEW_DEBOUNCE_MS = 200;
+// The scope arrives in more than one piece while a form loads, so auto-add
+// waits for it to settle rather than firing per field.
+const AUTO_ADD_DEBOUNCE_MS = 400;
 
 // The keywords a prompt actually carries. Brackets only, and never braces:
 // {a|b} is ComfyUI's own dynamic-prompt syntax and this cannot tell one from a
@@ -76,6 +135,14 @@ export default {
     // builds, so unticking it silently changed nothing. Empty falls back to
     // `prompt`, which is what a host that does not know any better gets.
     scope: { type: String, default: '' },
+    // Whether the tab this panel sits on is the one showing. Both hosts keep
+    // every tab mounted (v-show), so there is no mount to hang "arriving here"
+    // on — and the auto-add below needs exactly that moment. Defaults true so a
+    // host that never passes it still gets the feature, just without the gate.
+    //
+    // Not "active": activeRows and activeReplacements both already mean
+    // "switched on and able to fire", which is a different question entirely.
+    visible: { type: Boolean, default: true },
   },
   setup(props) {
     // The library is only needed once a [keyword] rule exists, but it is two
@@ -141,7 +208,15 @@ export default {
       const g = row.keyword ? groupInfo.value.get(foldTok(r0.from)) : null;
       const indices = (g && g.indices) || [];
       const answers = row.rules.length;
+      // A [promptN] row builds one figure out of its answers instead of
+      // choosing between them, so almost everything the row displays reads
+      // differently: the count is parts rather than jobs, and the number worth
+      // showing is how many versions of the figure there are.
+      const composite = isCompositeRule(r0);
+      const shelves = composite ? new Set(row.rules.map(pickKeyOf)).size : 0;
       return Object.assign(row, {
+        composite, shelves,
+        factor: (g && g.factor) || 1,
         from: String(r0.from == null ? '' : r0.from),
         on: row.rules.every(r => r.on),
         picked,
@@ -283,6 +358,59 @@ export default {
     // the keyword: renaming it, switching it off or deleting it means the
     // keyword, not whichever of its answers happens to be first.
     const addRepl = () => replacements.push({ from: '', to: '', on: true, promptId: '' });
+
+    // ── Keywords the prompt has that no row answers ─────────────────────
+    // A prompt that says [mother] against a rules list with no [mother] in it
+    // is a keyword that gets swept out of the graph before the run with nothing
+    // on screen having mentioned it. Renaming a row is how you get there
+    // without noticing: [prompt1] becomes [mother] in the prompt, the old row
+    // still reads [prompt1], and the new word answers to nothing.
+    //
+    // So the tokens the text carries get a row each, empty, waiting to be
+    // answered — which is also where the ✕ is if it was not wanted.
+    //
+    // Only what the text says out loud. A keyword reached through another
+    // rule's replacement — [female] resolving to "…, [hair], …" — already fires
+    // and is already offered under "pulled in by a rule" in the find menu; a
+    // prompt saying [female] sprouting six empty rows for the shelves behind it
+    // is a list nobody asked for.
+    const autoAdd = () => {
+      const text = scopeText.value;
+      if (!text || !text.trim()) return;
+      const have = new Set(replacements.map(r => foldTok(r.from)));
+      const add = [];
+      for (const m of text.match(PROMPT_TOKEN) || []) {
+        const k = foldTok(m);
+        if (!k || isIndexToken(k) || have.has(k)) continue;
+        // The token pattern has no length bound and spans newlines, and this
+        // text comes out of whatever file is open — including prompts lifted
+        // from a downloaded image. One stray [ ... ] around a paragraph would
+        // otherwise write that paragraph into a store shared by every device,
+        // to be compiled into a regex on every run.
+        if (m.length > MAX_AUTO_TOKEN || /[\r\n]/.test(m)) continue;
+        // A [promptN] shape is never auto-created: an empty one reads as a
+        // capture in play and masks the whole list (see isLiveCapture).
+        if (isCompositeRule({ from: m })) continue;
+        have.add(k);
+        add.push(m.trim());
+        if (add.length >= MAX_AUTO_ADD) break;
+      }
+      if (!add.length) return;
+      for (const from of add) replacements.push({ from, to: '', on: true, promptId: '' });
+      saveReplacements();
+      // Named, because they are appended and the list is sorted and may be
+      // scrolled — a row appearing somewhere off screen is not an event.
+      showToast('Added ' + add.join(', ') + ' — pick what ' + (add.length === 1 ? 'it' : 'they') + ' should become');
+    };
+    // Gated on the tab, and debounced behind it. The prompt field lives on the
+    // Workflow tab and this panel on the Run tab, so a keyword being typed is
+    // never seen half-finished here — which is what keeps [moth, [mothe and
+    // [mother] from becoming three rows. The debounce is for the load, where
+    // the scope arrives in more than one piece.
+    let autoT = null;
+    const queueAutoAdd = () => { clearTimeout(autoT); autoT = setTimeout(autoAdd, AUTO_ADD_DEBOUNCE_MS); };
+    watch(() => [props.visible, scopeText.value], () => { if (props.visible) queueAutoAdd(); }, { immediate: true });
+    onBeforeUnmount(() => { clearTimeout(autoT); clearTimeout(previewT); });
     const delRow = (row) => {
       for (const r of row.rules) {
         const i = replacements.indexOf(r);
@@ -291,7 +419,24 @@ export default {
       saveReplacements();
     };
     const setFrom = (row, v) => { for (const r of row.rules) r.from = v; };
-    const toggleRow = (row) => { const on = !row.on; for (const r of row.rules) r.on = on; saveReplacements(); };
+    // Turning a row back on by hand takes it out of the capture's hands: it was
+    // switched off for you, and you have just said otherwise, so it must not be
+    // switched off again on the next pass or restored a second time later.
+    const toggleRow = (row) => {
+      const on = !row.on;
+      for (const r of row.rules) {
+        r.on = on;
+        // Switched off by hand: whatever the mask thought about this row, the
+        // user has just said otherwise and the override retires with it.
+        if (!on) { delete r.autoKeep; continue; }
+        delete r.autoOff;
+        // Switched on while a capture is masking: a deliberate override, and
+        // it has to outlive the next false->true swing of the mask or the row
+        // goes back off the moment the capture leaves the prompt and returns.
+        if (maskOn.value) r.autoKeep = true;
+      }
+      saveReplacements();
+    };
     const swapRow = (row) => {
       const r = row.rules[0];
       const a = r.from; r.from = r.to; r.to = a;
@@ -299,7 +444,12 @@ export default {
     };
     const toggleReplAll = () => {
       const on = !replAllOn.value;
-      replacements.forEach(r => { r.on = on; });
+      replacements.forEach(r => {
+        r.on = on;
+        if (!on) { delete r.autoKeep; return; }
+        delete r.autoOff;
+        if (maskOn.value) r.autoKeep = true;
+      });
       saveReplacements();
     };
 
@@ -359,6 +509,18 @@ export default {
     };
     const valTitle = (row) => {
       const kw = String(row.from).trim();
+      // A composite row's answers are parts, so the sentence every other row
+      // gets — "a run queues a job for each" — is the one thing it must not say.
+      if (row.composite) {
+        const n = row.picked.length;
+        return n
+          ? n + ' part' + (n === 1 ? '' : 's') + ' joined into ' + kw
+            + (row.shelves > 1 ? ', across ' + row.shelves + ' categories' : '')
+            + (row.factor > 1 ? ' — ' + row.factor + ' versions of it, since a category has more than one ticked' : '')
+            + '. Click to change.'
+          : 'Build ' + kw + ' out of the library — one from each category, joined into a single prompt.'
+            + ' Tick two from the same category and the run does one job per version.';
+      }
       if (row.pinned) {
         return row.picked.length + ' answer' + (row.picked.length === 1 ? '' : 's') + ' for ' + kw
           + ', and the prompt asks for ' + ixLabel(row) + ' by index — so they all land in the one'
@@ -373,7 +535,10 @@ export default {
     // nothing addressing it by number is a row where the number is noise; the
     // moment there are two to tell apart, or the prompt has started naming
     // them, it is the only thing that says which is which.
-    const showIx = row => row.pinned || row.picked.length > 1;
+    //
+    // Never on a composite row: its answers are not a numbered list of
+    // alternatives, and an index into them would be pointing at a part.
+    const showIx = row => !row.composite && (row.pinned || row.picked.length > 1);
     const ixLabel = row => (row.indices || []).map(n => '[' + n + ']').join('');
 
     // ── Pinned by index ─────────────────────────────────────────────────
@@ -417,20 +582,53 @@ export default {
     // against the fields it is about to send: a group this text cannot reach
     // resolves the same way in every combination, and a row of tabs holding the
     // identical paragraph is worse than no tabs at all.
+    // Whether the panel is showing its body. A <details> keeps its children in
+    // the DOM when closed, so this is what stops the preview column being built
+    // for a panel nobody has opened — see `resolved` and the v-if on the body.
+    const panelOpen = ref(false);
     const variations = computed(() => replacementVariations(scopeText.value));
-    const vIdx = ref(0);
-    // Clamped on read rather than watched and reset. Editing a rule reshapes the
-    // list under the cursor — unticking one answer collapses six prompts back
-    // into three — and an index left past the end would paint nothing at all.
-    const vSel = computed(() => Math.min(Math.max(vIdx.value, 0), Math.max(variations.value.length - 1, 0)));
-    const pickVariation = n => { vIdx.value = n; };
-    const variation = computed(() => variations.value[vSel.value] || []);
-    const finalPrompt = computed(() => applyReplacements(props.prompt || '', variation.value));
-    // The same text again, cut into runs by which rule produced each one, so the
-    // preview can colour what the rules put there. Null when the painted walk and
-    // the real one disagree — see paintReplacements; the template falls back to
+    // What the preview paints, one beat behind what the rules say.
+    //
+    // Every keystroke in a find or replace box invalidates `variations`, and
+    // with every prompt now rendered in full that repainted N paragraphs per
+    // character instead of one — on a client that is often a phone. The rows
+    // still update instantly; only the column on the right waits.
+    const previewVariations = ref([]);
+    let previewT = null;
+    watch([variations, panelOpen], ([v, open]) => {
+      clearTimeout(previewT);
+      if (!open) { previewVariations.value = []; return; }
+      if (!previewVariations.value.length) { previewVariations.value = v; return; }
+      previewT = setTimeout(() => { previewVariations.value = v; }, PREVIEW_DEBOUNCE_MS);
+    }, { immediate: true });
+    // Every one of them resolved, not just a selected one. There is no selection
+    // any more: all of the prompts are on screen at once, so there is nothing
+    // left to clamp, reset when the list reshapes, or leave pointing past the
+    // end when unticking an answer collapses six prompts back into three.
+    //
+    // And each cut into runs by which rule produced it, so the words can carry
+    // the colour of the row that put them there. Null when the painted walk and
+    // the real one disagree — see paintReplacements; the block then falls back to
     // the plain string rather than showing a preview that is not the run.
-    const painted = computed(() => paintReplacements(props.prompt || '', variation.value));
+    //
+    // One pass per variation rather than one for the visible one, which is the
+    // cost of showing them all: a few regex passes over a paragraph, times the
+    // number of jobs, recomputed only when the rules or the prompt change.
+    // Only while the panel is actually open. It is a <details>, which hides its
+    // body with CSS rather than removing it, and both hosts keep the Run tab
+    // mounted — so every variation was applied, painted and turned into DOM
+    // before anything had been clicked, on a tab that was not even showing.
+    // Four rows of four answers is 256 paragraphs built for nobody.
+    //
+    // Painted first and the text taken from the spans: paintReplacements
+    // already runs applyReplacements internally for its self-check, so asking
+    // for both ran the pipeline three times per variation where two will do —
+    // and the spans are cut from the exact string that check compared against,
+    // so the two cannot disagree.
+    const resolved = computed(() => (panelOpen.value ? previewVariations.value : []).map(v => {
+      const painted = paintReplacements(props.prompt || '', v);
+      return { painted, text: painted ? painted.map(x => x.text).join('') : applyReplacements(props.prompt || '', v) };
+    }));
     // A row only earns a colour once it can actually fire; an off or half-typed
     // row contributes nothing to the preview and a lit dot beside it would be
     // pointing at text that is not there.
@@ -465,10 +663,21 @@ export default {
       rowsRaw.value.slice().sort(byFrom).forEach((row, n) => m.set(row.key, n));
       sortOrder.value = m;
     }
-    function onPanelToggle(e) { if (e.target.open) snapshotOrder(); }
+    // Opening the panel is the other moment worth scanning at: it is when the
+    // rows are about to be read, and waiting out a debounce to show a row that
+    // should already be there is the delay this is meant to remove.
+    function onPanelToggle(e) {
+      panelOpen.value = !!e.target.open;
+      if (e.target.open) { snapshotOrder(); autoAdd(); }
+    }
+    // Rows this switched off for a capture are folded out of the list rather
+    // than left sitting in it unticked — a column of switched-off rules with
+    // nothing saying why is the thing the fold exists to replace. `showHidden`
+    // puts them back in place, still off, where their own tick boxes work.
     const rows = computed(() => {
       const order = sortOrder.value;
-      const list = rowsRaw.value.slice();
+      let list = rowsRaw.value.slice();
+      if (!showHidden.value) list = list.filter(row => !isMasked(row));
       if (!order) return list;
       const at = row => (order.has(row.key) ? order.get(row.key) : Infinity);
       return list.sort((a, b) => at(a) - at(b) || a.first - b.first);
@@ -513,6 +722,117 @@ export default {
         : 'Rules for ' + list + ' are set, but this prompt doesn’t use them — so they replace nothing and don’t multiply the run.';
     });
 
+    // ── Composing from captures switches the ingredients off ────────────
+    // A capture is the whole paragraph after every keyword under it has already
+    // resolved. So once the prompt is built out of [prompt1] and [prompt2], the
+    // rows those captures were made from are not ingredients any more — they are
+    // a list of rules that cannot reach this run, sitting above the two that can.
+    // They are switched off and folded away, and the line that replaces them
+    // says how many and offers them back.
+    //
+    // **On AND reached, not merely on.** A capture is added enabled, so keying
+    // this on the tick box alone would fire the instant you captured the first
+    // tab — switching off the very [female] whose second tab you were about to
+    // capture, and collapsing the tabs under the cursor. "In play" is what the
+    // tick box means here, and being named by the prompt is what puts it in play.
+    //
+    // The switch-off is real and written, so `autoOff` is written beside it: it
+    // marks the rows this did, so leaving the state restores exactly those and
+    // never a row that was already off when we got here. Without that record the
+    // rules list is global and shared, and this would read as [female] quietly
+    // replacing nothing in every other workflow, forever.
+    const isCaptureRule = isCompositeRule;
+    // In play: on, named by the prompt, AND actually resolving to something.
+    //
+    // That last clause is the whole guard. autoAdd creates an empty row for any
+    // bracketed token the text carries, so a prompt that merely mentions
+    // [prompt1] — a file from another install, or your own after the library
+    // entry was deleted — manufactured a capture that substituted nothing and
+    // switched off every other rule anyway, with a toast saying the captures
+    // already held them. Deleting the row un-masked, the next panel open
+    // re-added it, and round it went.
+    const isLiveCapture = (r, keys) => r.on && isCaptureRule(r)
+      && keys.has(foldTok(r.from)) && !!String(replacementText(r) || '').trim();
+    const captureState = computed(() => {
+      const keys = liveKeys.value;
+      if (!keys) return null;          // no scope yet — decide nothing either way
+      return replacements.some(r => isLiveCapture(r, keys));
+    });
+    const showHidden = ref(false);
+    // What the fold follows is the *state*, not the mark. `autoOff` only ever
+    // records which rows this switched off, so that leaving the state can put
+    // exactly those back — keying the fold on it meant a row already switched
+    // off by hand stayed in the list, unticked, which is precisely the clutter
+    // the fold exists to remove. A row that is off is irrelevant to this run
+    // however it got that way.
+    //
+    // A row that is ON stays visible even here: something deliberately turned
+    // it back on, and it still reaches the run, so folding it away would hide
+    // the one row in the group that is actually doing something.
+    const maskOn = computed(() => captureState.value === true);
+    const isMasked = row => maskOn.value && !row.composite && !row.on;
+    const hiddenRows = computed(() => (maskOn.value ? rowsRaw.value.filter(isMasked) : []));
+    // The captures doing the hiding, so the line can name them rather than
+    // leaving "6 hidden" to be traced back to whatever caused it.
+    // By row, not by rule: a composite row holds one rule per part, so naming
+    // them off the rule list printed "[prompt1] and [prompt1] and [prompt1]…"
+    // once for each of its six answers.
+    const hiddenBy = computed(() => {
+      const keys = liveKeys.value;
+      if (!keys) return [];
+      const seen = new Set();
+      for (const r of replacements) {
+        if (!isLiveCapture(r, keys)) continue;
+        seen.add(String(r.from).trim());
+      }
+      return [...seen];
+    });
+    const hiddenTitle = computed(() => hiddenRows.value.map(r => String(r.from).trim()).join(', ')
+      + ' — switched off and folded away while ' + (hiddenBy.value.join(' / ') || 'the capture')
+      + ' is in the prompt. The ones this switched off come back when it leaves;'
+      + ' tick any of them to bring it back on its own.');
+    watch(captureState, (now, was) => {
+      if (now === null) return;        // never act on "don't know"
+      // Counted in rows, not rules, like every other count in this panel: a
+      // keyword with four answers is one thing switched off, and saying four
+      // would disagree with the line that is about to appear in its place.
+      const hit = new Set();
+      if (now) {
+        for (const r of replacements) {
+          // Not a capture, not already off, not blank (a row with no find
+          // cannot fire, so "the captures already hold it" would be untrue of
+          // it), and not one switched back on by hand — that is what autoKeep
+          // records, and without it taking the capture out of the prompt and
+          // putting it back masked the row again.
+          if (isCaptureRule(r) || !r.on || r.autoKeep || !String(r.from).trim()) continue;
+          r.on = false; r.autoOff = true; hit.add(foldTok(r.from));
+        }
+        if (hit.size) {
+          saveReplacements();
+          showToast(hit.size + ' rule' + (hit.size === 1 ? '' : 's') + ' switched off — the captures already hold them');
+        }
+        return;
+      }
+      // Back out: exactly the rows this switched off, and nothing else.
+      // autoKeep is deliberately NOT cleared here. It is the record that the
+      // user overrode the mask on this row, and the case it exists for is
+      // precisely the next false->true swing — take the capture out of the
+      // prompt and put it back, and without it the row goes straight off
+      // again. Only the user switching that row off retires it.
+      for (const r of replacements) {
+        if (!r.autoOff) continue;
+        r.on = true; delete r.autoOff; hit.add(foldTok(r.from));
+      }
+      if (hit.size) {
+        saveReplacements();
+        // != rather than !==: an immediate watcher passes undefined, not null,
+        // so the strict form never suppressed the mount run and a host with the
+        // form already cached got a toast for something nobody did.
+        if (was != null) showToast(hit.size + ' rule' + (hit.size === 1 ? '' : 's') + ' switched back on');
+      }
+      showHidden.value = false;
+    }, { immediate: true });
+
     // ── What a tab is ───────────────────────────────────────────────────
     // The titles a combination picked — the prompt each [keyword] resolved to —
     // each in the colour of the row that put it there. This is the tab's label
@@ -544,54 +864,31 @@ export default {
     // a free-text rule has no title, and neither has a keyword rule whose prompt
     // has since been deleted — `to` is the snapshot kept for exactly that.
     const ruleTitle = r => (isKeywordRule(r) && promptName(r.promptId)) || oneLine(replacementText(r)) || '(nothing)';
-    // In the order the rows are listed, not the order the rules are stored. The
-    // rows are what is on screen — the keyword list beside these tabs, read top
-    // to bottom — so a tab that names its picks in any other order is asking you
-    // to match them up by colour. Reading down the rows and along a tab now give
-    // the same sequence, which is also the order the palette runs in, since the
-    // colours are handed out down that same list.
+    // Only the groups that vary name a prompt. The rules every combination
+    // shares are in all of them, so repeating those says nothing about which
+    // prompt is which — a solo rule and a pinned keyword are both in that
+    // position, which is why "varies" is one question asked in the module rather
+    // than the same filter written out at each site that needs it.
     //
-    // Sorting the filtered copy, never the variation itself: that array is the
-    // rule list a run applies, and its order is the order they execute in.
-    const rowAt = (r) => {
-      const n = colorIdx.value.get(r);
-      return n == null ? Infinity : n;
-    };
-    // A pinned keyword is left out: every one of its answers is in every
-    // combination, so naming them here would put the same four titles on all of
-    // the tabs and say nothing about which tab is which — the very thing the
-    // labels replaced "Prmpt 3" to avoid.
-    const picksFor = (v) => {
-      const live = reachableRules(scopeText.value, v);
-      return v.filter(r => isKeywordRule(r) && live.has(r) && !pinnedKeys.value.has(foldTok(r.from)))
-        .sort((a, b) => rowAt(a) - rowAt(b))
-        .map(r => ({
-          i: replacements.indexOf(r), from: String(r.from).trim(),
-          title: ruleTitle(r), full: oneLine(replacementText(r)),
-        }));
-    };
-    // Only the groups that vary name a tab. The rules every combination shares
-    // are in all of them, so repeating those in each tooltip says nothing about
-    // which tab is which — and a pinned keyword shares all of its answers with
-    // every combination, which is why "varies" is one question asked in the
-    // module rather than the same filter written out at each site that needs it.
-    const varyingKeys = computed(() => varyingGroupKeys(scopeText.value));
-    const pinnedKeys = computed(() => new Set(
-      [...groupInfo.value.values()].filter(g => g.pinned).map(g => g.key)
-    ));
-    const tabs = computed(() => variations.value.map((v, n) => ({
+    // It is the hover only now. The titles used to be the visible label of a
+    // strip that selected which single paragraph was shown; with every prompt on
+    // screen in full, a summary of the words directly beside them is a second,
+    // shorter copy of something already legible — and the colours do the naming.
+    const varyingKeys = computed(() => varyingPickKeys(scopeText.value));
+    const tabs = computed(() => previewVariations.value.map((v, n) => ({
       n,
-      label: 'Prmpt ' + (n + 1),
-      picks: picksFor(v),
       on: !isVariationSkipped(v),
-      // The hover names the keywords the visible titles answer, and only the
-      // ones that vary: the rules every combination shares are in all of them,
-      // so repeating those in each tooltip says nothing about which tab is which.
-      title: v.filter(r => varyingKeys.value.has(foldTok(r.from)))
+      text: (resolved.value[n] || {}).text || '',
+      painted: (resolved.value[n] || {}).painted || null,
+      // Which keywords made this one what it is, for the hover over its text.
+      title: v.filter(r => varyingKeys.value.has(pickKeyOf(r)))
         .map(r => String(r.from).trim() + ' → ' + ruleTitle(r)).join(' · ')
         || 'The prompt with every rule applied',
     })));
-    const keptCount = computed(() => tabs.value.filter(t => t.on).length);
+    // Straight off the variations, never off `tabs`: the collapsed summary
+    // shows this number, and reading it through tabs pulled the whole paint
+    // pipeline for a panel nobody had opened.
+    const keptCount = computed(() => variations.value.filter(v => !isVariationSkipped(v)).length);
     // Unticking a tab leaves that prompt out of the run; the tick lives in the
     // module, so closing the panel and opening it again finds it where it was.
     //
@@ -605,6 +902,82 @@ export default {
       if (!v || (t.on && keptCount.value < 2)) return;
       setVariationSkipped(v, t.on);
     }
+    // ── Saving one ──────────────────────────────────────────────────────
+    // The next free [promptN]. Counted across the library AND the rules, not
+    // just the library: deleting a captured entry from the Prompts page leaves
+    // its rule behind, and reusing that number would point two rows at the same
+    // token — the second would never fire, which is the silent kind of wrong.
+    const nextCaptureName = () => {
+      let n = 0;
+      const seen = s => { const m = CAPTURE_NUM_RE.exec(String(s || '').trim()); if (m) n = Math.max(n, Number(m[1])); };
+      for (const p of promptLib.prompts) seen(p.name);
+      for (const r of replacements) seen(r.from);
+      return 'prompt' + (n + 1);
+    };
+    // Clicking save twice on the same tab is one click and a toast apart, and
+    // the second one looks exactly like the first. So an identical capture is
+    // handed back rather than filed again — the library is a shelf, not a log.
+    // An identical capture already on the shelf, whether or not a rule still
+    // points at it: requiring the rule meant deleting a [promptN] row and
+    // pressing ＋ again filed a second entry with the same text under a new
+    // number rather than re-linking the one already there.
+    const sameCapture = text => promptLib.prompts.find(p =>
+      p.category === CAPTURE_CATEGORY && String(p.text).trim() === text);
+    const ruleFrCapture = p => replacements.find(r => r.promptId === p.id);
+    async function saveVariation(n) {
+      const v = variations.value[n];
+      if (!v) return;
+      // savePrompts is a whole-list replace, and loadPrompts marks the library
+      // loaded even when the fetch failed — leaving it empty. Saving a capture
+      // on top of that would post one entry as the entire library and delete
+      // every prompt on the install. The Prompts page guards the same way.
+      if (!promptLib.loaded || promptLib.error) {
+        showToast('The prompt library has not loaded — can not save a capture yet', 4000);
+        return;
+      }
+      const text = String(applyReplacements(props.prompt || '', v) || '').trim();
+      if (!text) { showToast('That prompt resolves to nothing — nothing to save'); return; }
+      const had = sameCapture(text);
+      if (had) {
+        // On the shelf but with no rule left pointing at it: give it its rule
+        // back rather than filing the same paragraph twice.
+        if (!ruleFrCapture(had)) {
+          replacements.push({ from: '[' + had.name + ']', to: had.text, on: true, promptId: had.id });
+          saveReplacements();
+          showToast('Restored [' + had.name + '] — it was already in the library');
+        } else showToast('Already saved as [' + had.name + ']');
+        return;
+      }
+      const name = nextCaptureName();
+      const id = newPromptId();
+      // The category has to exist in the list or promptsByCategory files the
+      // entry under "Uncategorised", which is a shelf nobody chose.
+      if (!promptLib.categories.includes(CAPTURE_CATEGORY)) promptLib.categories.push(CAPTURE_CATEGORY);
+      promptLib.prompts.push({ id, category: CAPTURE_CATEGORY, name, text });
+      // Awaited, and the rule only follows once the entry is really on disk:
+      // a fire-and-forget save meant a failed POST reported success while the
+      // entry the rule points at existed only until the tab closed.
+      try {
+        await savePrompts();
+      } catch (e) {
+        const i = promptLib.prompts.findIndex(p => p.id === id);
+        if (i >= 0) promptLib.prompts.splice(i, 1);
+        showToast('Could not save the capture: ' + e.message, 5000);
+        return;
+      }
+      // `to` alongside the id, as every [keyword] rule stores it: the id is the
+      // live link, and this is what the server's own copy and an older build
+      // still have something literal to substitute.
+      replacements.push({ from: '[' + name + ']', to: text, on: true, promptId: id });
+      saveReplacements();
+      showToast('Saved as [' + name + ']');
+    }
+    // Naming which prompt, off the same summary the text itself hovers with:
+    // the picks it was built from went with the label strip, and a button whose
+    // tooltip says only "save this prompt" is ambiguous in a column of them.
+    const saveTitle = t => 'Save this prompt to the library as its own [keyword], so it can stand beside another one'
+      + (t ? ' — ' + t.title : '');
+
     const tabTitle = t => (t.on
       ? (keptCount.value < 2
         ? 'Something has to run — this is the last one ticked'
@@ -627,15 +1000,17 @@ export default {
         : 'Ignored — this prompt doesn’t contain ' + String(row.from).trim();
     };
     return {
-      finalPrompt, replacements, saveReplacements, replAllOn, activeRows, promptLib,
+      replacements, saveReplacements, replAllOn, activeRows, promptLib,
       idleRows, idleTitle, rowReaches,
       rows, rowColor, rowLive, dotTitle, colorAt, ruleColor,
       addRepl, delRow, setFrom, toggleRow, swapRow, toggleReplAll,
       menuFor, openMenu, closeMenu, menuList, chooseKeyword, ruleFor, onFindEsc,
       valFor, openVals, closeVals, valMenu, toggleVal, valLabel, valTitle, oneLine,
       showIx, ixLabel, pinNotes,
-      painted, variations, onPanelToggle,
-      tabs, vSel, pickVariation, keptCount, toggleTab, tabTitle,
+      variations, onPanelToggle, panelOpen,
+      tabs, keptCount, toggleTab, tabTitle,
+      saveVariation, saveTitle, HELP,
+      hiddenRows, hiddenBy, hiddenTitle, showHidden,
     };
   },
   template: `
@@ -651,19 +1026,10 @@ export default {
            them as active. Muted, not red — an ignored rule is the absence of a
            multiplication, so nothing is about to cost anything — with the
            keywords themselves on the hover. -->
-      <summary>Prompt Replacements<span class="rmx-repl-on" v-if="activeRows"> — {{ activeRows }} active</span><span class="rmx-mut" v-else-if="rows.length && !idleRows.length"> — {{ rows.length }} off</span><span class="rmx-repl-idle" v-if="idleRows.length" :title="idleTitle">{{ activeRows ? ', ' : ' — ' }}{{ idleRows.length }} ignored</span><span class="rmx-repl-jobs" v-if="variations.length > 1">, {{ keptCount }} job{{ keptCount === 1 ? '' : 's' }} total</span></summary>
-      <div class="rmx-repl-body">
-        <div class="rmx-mut" style="font-size:12px;margin-bottom:8px">
-          Applied to the prompt right before each run (case-insensitive, all matches).
-          Shared by the dialog and the inspect page. Write the find as
-          <code>[keyword]</code> to replace it with prompts from the library — tick
-          as many answers as you like, and a run queues a job for each.
-          Write <code>[keyword][0]</code> and <code>[keyword][1]</code> in the prompt
-          instead to put two of those answers in the <em>same</em> prompt: a keyword
-          addressed by index stops multiplying the run, and each reference takes the
-          answer at that number below.
-          Anything left in brackets that no enabled rule claims is dropped before the run.
-        </div>
+      <!-- The ⓘ swallows its own click: it sits inside the summary, so without
+           that, reading what the panel is would shut it. -->
+      <summary>Prompt Replacements<span class="rmx-repl-i" :title="HELP" @click.prevent.stop>ⓘ</span><span class="rmx-repl-on" v-if="activeRows"> — {{ activeRows }} active</span><span class="rmx-mut" v-else-if="rows.length && !idleRows.length"> — {{ rows.length }} off</span><span class="rmx-repl-idle" v-if="idleRows.length" :title="idleTitle">{{ activeRows ? ', ' : ' — ' }}{{ idleRows.length }} ignored</span><span class="rmx-repl-jobs" v-if="variations.length > 1">, {{ keptCount }} job{{ keptCount === 1 ? '' : 's' }} total</span></summary>
+      <div class="rmx-repl-body" v-if="panelOpen">
         <!-- Two columns wherever there is room: the rules on the left, what they
              produce on the right, so an edit and its effect are beside each
              other rather than a scroll apart. One column below that width — see
@@ -671,6 +1037,15 @@ export default {
         <div class="rmx-repl-cols">
           <div class="rmx-repl-list">
             <label class="rmx-repl-all"><input type="checkbox" :checked="replAllOn" @change="toggleReplAll"> Toggle all on/off</label>
+            <!-- What the captures displaced. It stands where the rows did, names
+                 the capture responsible, and says the switch-off undoes itself —
+                 because a rule silently off in a list shared by every workflow
+                 is the one thing this must never look like. -->
+            <div v-if="hiddenRows.length" class="rmx-repl-mask" :title="hiddenTitle">
+              <span><b>{{ hiddenRows.length }}</b> rule{{ hiddenRows.length === 1 ? '' : 's' }} off and hidden —
+                {{ hiddenBy.join(' and ') || 'the captures' }} already hold{{ hiddenBy.length === 1 ? 's' : '' }} them.</span>
+              <button type="button" class="rmx-repl-mask-b" @click="showHidden = !showHidden">{{ showHidden ? 'hide' : 'show' }}</button>
+            </div>
             <div v-for="row in rows" :key="row.id" class="rmx-repl-row">
               <span class="rmx-repl-dot" :class="{off: !rowLive(row) || !rowReaches(row)}" :style="{ background: rowColor(row) }"
                     :title="dotTitle(row)"></span>
@@ -721,6 +1096,7 @@ export default {
                        badge beside it means "this many jobs", which a pinned
                        keyword no longer does, so it stands down for this one. -->
                   <span v-if="row.pinned" class="rmx-valbtn-ix" :class="{warn: row.missing.length}">{{ ixLabel(row) }}</span>
+                  <span v-else-if="row.composite" class="rmx-valbtn-ix" :class="{warn: row.factor > 1}">{{ row.shelves }}×{{ row.factor > 1 ? " " + row.factor + " ver" : "" }}</span>
                   <span v-else-if="row.picked.length > 1" class="rmx-valbtn-n">{{ row.picked.length }}</span>
                   <span class="rmx-valbtn-c">▾</span>
                 </button>
@@ -776,32 +1152,33 @@ export default {
           </div>
 
           <div v-if="prompt" class="rmx-repl-final">
-            <!-- One tab per combination the rules multiply out to, one per line,
-                 each labelled with the titles it picked in the colours those
-                 titles are about to appear in below. The run queues a job for
-                 each, so this is the only place they can be read before they come
-                 back as images. -->
-            <div v-if="tabs.length > 1" class="rmx-repl-tabs">
-              <!-- Two controls in one row: the box decides whether this prompt
-                   runs, the titles decide which one is on screen. An unticked tab
-                   still selects — you have to be able to read what you are
-                   leaving out. -->
-              <span v-for="t in tabs" :key="t.n" class="rmx-repl-tab" :class="{on: t.n === vSel, skip: !t.on}">
-                <input type="checkbox" :checked="t.on" :disabled="t.on && keptCount < 2"
-                       :title="tabTitle(t)" @change="toggleTab(t)">
-                <button type="button" class="rmx-repl-tab-l" :title="t.title"
-                        @click="pickVariation(t.n)">
-                  <template v-if="t.picks.length"><span v-for="p in t.picks" :key="p.i"
-                        :style="{ color: colorAt(p.i) }" :title="p.from + ' → ' + p.full">{{ p.title }}</span></template>
-                  <template v-else>{{ t.label }}</template>
-                </button>
-              </span>
-            </div>
-            <div class="rmx-repl-final-text">
-              <template v-if="painted && painted.length"><span v-for="(s,si) in painted" :key="si"
-                    :style="s.rule >= 0 ? { color: colorAt(s.rule) } : null"
-                    :title="s.rule >= 0 ? 'from ' + (replacements[s.rule] || {}).from : null">{{ s.text }}</span></template>
-              <template v-else>{{ finalPrompt || "(empty once the rules are applied)" }}</template>
+            <!-- Every prompt the run will send, in full, one per block. It used
+                 to be a strip of titles — "Mature", "Adult" — that selected which
+                 single paragraph was shown underneath, so reading the second one
+                 meant clicking it, and comparing them meant clicking back and
+                 forth. The titles were also a summary of a thing already on
+                 screen in the only form that matters: the words themselves, in
+                 the colour of the row that put them there.
+                 So each block carries its own two controls — the box that decides
+                 whether it runs, the ＋ that saves it as a keyword of its own —
+                 and there is no selection left to make. Which also retires the
+                 loose save button that appeared under the paragraph whenever
+                 there was only one variation: every prompt now has its own. -->
+            <div class="rmx-repl-prompts">
+              <div v-for="t in tabs" :key="t.n" class="rmx-repl-prompt" :class="{skip: !t.on}">
+                <div class="rmx-repl-prompt-c">
+                  <input type="checkbox" :checked="t.on" :disabled="t.on && keptCount < 2"
+                         :title="tabTitle(t)" @change="toggleTab(t)">
+                  <button type="button" class="rmx-repl-prompt-s" :title="saveTitle(t)"
+                          @click.stop="saveVariation(t.n)">＋</button>
+                </div>
+                <div class="rmx-repl-final-text" :title="t.title">
+                  <template v-if="t.painted && t.painted.length"><span v-for="(s,si) in t.painted" :key="si"
+                        :style="s.rule >= 0 ? { color: colorAt(s.rule) } : null"
+                        :title="s.rule >= 0 ? 'from ' + (replacements[s.rule] || {}).from : null">{{ s.text }}</span></template>
+                  <template v-else>{{ t.text || "(empty once the rules are applied)" }}</template>
+                </div>
+              </div>
             </div>
           </div>
         </div>

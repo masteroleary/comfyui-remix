@@ -95,8 +95,26 @@ export function promptsMatching(keyword, keepId) {
   return { groups, filtered: true, keyword };
 }
 
+// One index, three lookups. These used to be a linear scan each, which was fine
+// while the library was hand-sized — but pickKeyOf now asks for a category once
+// per rule per variation, and capturing a prompt grows the library from the UI,
+// so neither "small" nor "per render" holds any more.
+const byId = computed(() => {
+  const m = new Map();
+  for (const p of promptLib.prompts) m.set(p.id, p);
+  return m;
+});
+export const promptById = id => byId.value.get(id) || null;
 // What a [keyword] rule substitutes: the prompt's text, found by id.
 export const promptTextById = id => {
-  const p = promptLib.prompts.find(x => x.id === id);
+  const p = promptById(id);
   return p ? p.text : '';
+};
+// Which shelf it came off. A composite row groups its answers by this — one
+// Hair and one Outfit are two parts of the same figure, where two Hairs are two
+// versions of it — so the category stops being only a filing decision and
+// becomes what the row is built out of.
+export const promptCategoryById = id => {
+  const p = promptById(id);
+  return p ? (p.category || '') : '';
 };

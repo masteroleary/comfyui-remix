@@ -16,8 +16,25 @@
 .rmx-tools .modal-act-btn{background:rgba(255,255,255,.16)}
 
 body.rmx-noscroll{overflow:hidden !important;overscroll-behavior:none}
-.rmx-overlay{position:fixed;inset:0;z-index:3000;background:#000b;display:flex;align-items:center;justify-content:center;padding:24px}
-.rmx-dialog{background:#141416;border:1px solid #38383a;border-radius:16px;width:100%;max-width:1060px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px #000c}
+.rmx-overlay{--rmx-gutter:24px;position:fixed;inset:0;z-index:3000;background:#000b;display:flex;align-items:center;justify-content:center;padding:var(--rmx-gutter)}
+/* A definite height rather than a cap. max-height alone meant the dialog was
+   only as tall as whatever it happened to hold, so the form, the rules panel
+   and the preview paragraph each got a slice of a box that shrank the moment a
+   workflow declared fewer fields — and the panel that most wants the room, the
+   one with a scrolling list of variations in it, was the one that never got it.
+   Every pane inside is already flex:1/min-height:0/overflow:auto, so filling the
+   window gives them the space and they scroll within it.
+   The gutter is the overlay's own, top and bottom, which is what keeps
+   this "nearly" full height: the dialog still reads as a sheet over the page
+   rather than a second page. dvh second, so a browser that has it uses the
+   viewport that excludes the collapsing toolbars and one that doesn't keeps vh. */
+.rmx-dialog{
+  background:#141416;border:1px solid #38383a;border-radius:16px;
+  width:100%;max-width:1060px;
+  height:calc(100vh - var(--rmx-gutter, 24px) * 2);
+  height:calc(100dvh - var(--rmx-gutter, 24px) * 2);
+  display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px #000c;
+}
 .rmx-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid #2c2c2e;flex:none}
 .rmx-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f2f2f7}
 /* Jobs still uses the single-row .rmx-head; only Remix stacks, so the column
@@ -235,8 +252,35 @@ select.rmx-inp{cursor:pointer}
    dimmed further either, since it is the half of "3 active" that explains why
    the count is not 6. The keywords are on its hover. */
 .rmx-repl>summary .rmx-repl-idle{font-weight:700;cursor:help}
+/* What the panel is, on the title rather than in a paragraph above the rows:
+   four sentences that never change were pushing the first row down every time
+   it was opened. Here it is also readable with the panel shut, which is when
+   the question is actually asked. Dimmer than the title and lit on hover, so it
+   is available without competing with the counts beside it. */
+.rmx-repl>summary .rmx-repl-i{
+  margin-left:6px;cursor:help;color:#5a5a5f;font-size:13px;
+  text-transform:none;letter-spacing:0;vertical-align:baseline;
+}
+.rmx-repl>summary .rmx-repl-i:hover{color:#0a84ff}
 .rmx-repl-body{padding:2px 12px 12px}
 .rmx-repl-all{display:flex;align-items:center;gap:6px;font-size:12px;color:#8e8e93;margin-bottom:8px;cursor:pointer;user-select:none}
+/* Where the rows a capture displaced used to be. Stated rather than left as an
+   absence: the rules list is global, so a rule quietly off is a rule that
+   replaces nothing in every other workflow, and the one thing this must not
+   look like is that. Muted, because nothing has gone wrong — it undoes itself
+   when the capture leaves the prompt. */
+.rmx-repl-mask{
+  display:flex;align-items:baseline;gap:8px;margin:0 0 8px;padding:6px 9px;
+  border-radius:8px;background:#141c26;border:1px solid #1e3a5c;
+  font-size:12px;color:#8e8e93;cursor:help;
+}
+.rmx-repl-mask span{flex:1;min-width:0}
+.rmx-repl-mask b{color:#64d2ff;font-weight:600}
+.rmx-repl-mask-b{
+  flex:none;background:none;border:0;padding:0;color:#0a84ff;
+  font:inherit;font-size:12px;cursor:pointer;text-decoration:underline;
+}
+.rmx-repl-mask-b:hover{color:#64d2ff}
 .rmx-repl-all input,.rmx-repl-row input[type=checkbox]{width:16px;height:16px;accent-color:#0a84ff}
 .rmx-repl-row{
   display:grid;
@@ -460,40 +504,45 @@ select.rmx-inp{cursor:pointer}
   font-size:12.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word;
   user-select:text;
 }
-/* One tab per prompt the rules multiply out to — a run queues a job for each,
-   and until they were tabs only the first of them could be read. One per line:
-   the label is the list of titles that combination picked, and eleven of those
-   do not fit beside eleven more. Three keywords with three answers each is 27
-   lines, so the stack scrolls rather than pushing the paragraph off screen. */
-.rmx-repl-tabs{
-  display:flex;flex-direction:column;gap:4px;margin-top:6px;
-  max-height:min(34vh,300px);overflow:auto;
+/* One block per prompt the run will send, each the whole paragraph rather than
+   a title standing in for it. It was a strip of titles that selected which
+   single paragraph was shown underneath, which meant reading the second prompt
+   was a click and comparing two of them was a click each way. Three keywords
+   with three answers each is 27 of these, so the column scrolls rather than
+   pushing the rules off screen. */
+.rmx-repl-prompts{
+  display:flex;flex-direction:column;gap:8px;margin-top:6px;
+  max-height:min(62vh,660px);overflow:auto;
 }
-/* Two controls in one row: the box says whether this prompt runs, the titles say
-   which one is being previewed. */
-.rmx-repl-tab{
-  display:flex;align-items:baseline;gap:7px;
-  background:#1c1c1e;border:1px solid #2c2c2e;border-radius:8px;padding:4px 9px 5px 8px;
+/* Controls down the left, text filling the rest: the boxes line up in a column
+   whatever height each paragraph runs to, which is what makes "which ones are
+   running" readable at a glance in a list of twenty-seven. */
+/* Off-screen blocks skip layout and paint entirely. The column scrolls, but
+   scrolling alone leaves every block in layout, and a run fanning out over
+   four keywords is hundreds of paragraphs. The intrinsic size is a rough
+   one-block guess so the scrollbar stays honest. */
+.rmx-repl-prompt{display:flex;align-items:flex-start;gap:8px;content-visibility:auto;contain-intrinsic-size:auto 88px}
+.rmx-repl-prompt-c{display:flex;flex-direction:column;align-items:center;gap:5px;flex:none;padding-top:9px}
+.rmx-repl-prompt-c input[type=checkbox]{width:14px;height:14px;margin:0;accent-color:#0a84ff;cursor:pointer}
+.rmx-repl-prompt-c input[type=checkbox]:disabled{cursor:default}
+.rmx-repl-prompt > .rmx-repl-final-text{flex:1;min-width:0;margin-top:0}
+/* Not going to run: still legible, because you have to be able to read what you
+   are leaving out, just plainly not part of this. Struck through would fight
+   the coloured words, so it dims and loses its ground instead. */
+.rmx-repl-prompt.skip{opacity:.45}
+.rmx-repl-prompt.skip > .rmx-repl-final-text{background:#060606;border-style:dashed}
+/* Save this prompt as its own [keyword]. Quiet until the block is under the
+   cursor: it sits on every one of them, and twenty-seven lit up would read as
+   the loudest thing in the panel when it is the least urgent. Always there on
+   touch, where there is no hover to reveal it. */
+.rmx-repl-prompt-s{
+  flex:none;width:22px;height:22px;padding:0;
+  background:#2c2c2e;border:1px solid #3a3a3c;border-radius:6px;
+  color:#8e8e93;font:inherit;font-size:12px;line-height:1;cursor:pointer;opacity:0;
 }
-.rmx-repl-tab input[type=checkbox]{width:13px;height:13px;margin:0;flex:none;accent-color:#0a84ff;cursor:pointer;position:relative;top:2px}
-.rmx-repl-tab input[type=checkbox]:disabled{cursor:default}
-/* The titles wrap rather than ellipsing: the whole point of the line is reading
-   what this prompt is, and half of it under a … is not that. */
-.rmx-repl-tab-l{
-  display:flex;flex-wrap:wrap;gap:0 .45em;flex:1;min-width:0;
-  background:none;border:0;padding:0;color:#8e8e93;text-align:left;
-  font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;line-height:1.45;
-}
-.rmx-repl-tab:hover{border-color:#0a84ff}
-.rmx-repl-tab:hover .rmx-repl-tab-l{color:#c7c7cc}
-/* Selected. Outlined rather than filled — a solid blue pill puts a blue
-   checkbox on a blue ground, and the box is the half that has to stay readable. */
-.rmx-repl-tab.on{background:#0a2540;border-color:#0a84ff}
-.rmx-repl-tab.on .rmx-repl-tab-l{color:#eaf3ff}
-/* Unticked: still selectable and still legible, because you have to be able to
-   read what you are leaving out — just plainly not going to run. */
-.rmx-repl-tab.skip{opacity:.5}
-.rmx-repl-tab.skip .rmx-repl-tab-l{text-decoration:line-through}
+.rmx-repl-prompt:hover .rmx-repl-prompt-s,.rmx-repl-prompt-s:focus-visible{opacity:1}
+.rmx-repl-prompt-s:hover{background:#0a2540;border-color:#0a84ff;color:#eaf3ff}
+@media (hover:none){.rmx-repl-prompt-s{opacity:1}}
 /* ── The panel in two columns ──────────────────────────────────────────────
    One column by default, two where there is room for two usable ones: a rule
    row carries two text inputs, a swap and a delete, and squeezed into half a

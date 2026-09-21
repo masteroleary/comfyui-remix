@@ -8,9 +8,9 @@ Media/**
 # a copy named anything else sat in the repo untracked-but-committable, hash and all.
 config.json
 config.backup*
-config.*.bak
+config.*.bak*
 restart.log
-*.bak
+*.bak*
 claude-conversations.json
 
 # OS files

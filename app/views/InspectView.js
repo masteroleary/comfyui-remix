@@ -32,7 +32,7 @@ import { launchJob, cancelJob, jobs, link, presetFromEmbedded, outputItems, forg
   promptAlternatives } from '../components/RemixDialog.js';
 import ReplacementRules from '../components/ReplacementRules.js';
 import WorkflowFields, { replaceableText } from '../components/WorkflowFields.js';
-import { keptVariations, varyingGroupKeys, replacementText, applyReplacements } from '../replacements.js';
+import { keptVariations, varyingPickKeys, pickKeyOf, replacementText, applyReplacements } from '../replacements.js';
 
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = window.Vue;
 const { useRoute, useRouter } = window.VueRouter;
@@ -740,10 +740,10 @@ export default {
       const variations = keptVariations(replText);
       // The same question the dialog asks, from the same place: a keyword the
       // prompt pins by index is in every combination whole, so it names nothing.
-      const multi = varyingGroupKeys(replText);
+      const multi = varyingPickKeys(replText);
       const labelFor = (v, n) => (variations.length < 2 ? '' :
         '#' + (n + 1) + '/' + variations.length + ' · ' + v
-          .filter(r => multi.has(String(r.from).trim().toLowerCase()))
+          .filter(r => multi.has(pickKeyOf(r)))
           .map(r => r.from + ' → ' + String(replacementText(r)).replace(/\s+/g, ' ').trim().slice(0, 28))
           .join(' · '));
       const jobParams = {
@@ -1198,7 +1198,7 @@ export default {
            same place as the dialog’s Run tab. Folded shut, its summary is the
            line that says ▶ Run is about to queue twelve of something; open, its
            tabs are where twelve becomes the five that were wanted. -->
-      <replacement-rules :prompt="promptFieldText" :scope="replScope"></replacement-rules>
+      <replacement-rules :prompt="promptFieldText" :scope="replScope" :visible="tab === 'run'"></replacement-rules>
     </div>
   </div>
 

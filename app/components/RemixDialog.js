@@ -23,7 +23,7 @@ import MediaTile from './MediaTile.js';
 import WorkflowFields, { ctype, shortLora, canonLora, loraWords, replaceableText } from './WorkflowFields.js';
 import ReplacementRules from './ReplacementRules.js';
 import { activeReplacements, applyReplacements, applyReplacementsToNodes, loadReplacements,
-  varyingGroupKeys, keptVariations, replacementText } from '../replacements.js';
+  varyingPickKeys, pickKeyOf, keptVariations, replacementText } from '../replacements.js';
 import { viewTo } from '../router.js';
 
 const { reactive, ref, computed, watch, onMounted, onUnmounted, provide, inject } = window.Vue;
@@ -1324,10 +1324,10 @@ export default {
       // is the module's question, not this one's — a keyword the prompt pins by
       // index carries all of its answers in every combination, so "more than
       // one rule" stopped being the same question as "varies".
-      const multi = varyingGroupKeys(replText);
+      const multi = varyingPickKeys(replText);
       const labelFor = (v, n) => (variations.length < 2 ? '' :
         '#' + (n + 1) + '/' + variations.length + ' · ' + v
-          .filter(r => multi.has(String(r.from).trim().toLowerCase()))
+          .filter(r => multi.has(pickKeyOf(r)))
           .map(r => r.from + ' → ' + String(replacementText(r)).replace(/\s+/g, ' ').trim().slice(0, 28))
           .join(' · '));
       const base = { workflowFile: wf.value, workflowLabel: label, embeddedWf: inherit ? meta.embeddedWf : null, source: { path: s.path, name: s.name, type: s.type }, promptText: pf ? applyReplacements(pf.value) : '', loras: loras.length ? loras : null, preset: selectedPreset.value, seedPinned, nodeEdits: edits, runs, matchSize: matchSizeFor(mediaFields[0] && mediaFields[0].value) };
@@ -1676,7 +1676,7 @@ export default {
                  behind it. Above the button it pushed the button itself down the
                  page; below the outputs it is where you go when the count on the
                  summary is not the one you wanted. -->
-            <replacement-rules :prompt="promptFieldText" :scope="replScope"></replacement-rules>
+            <replacement-rules :prompt="promptFieldText" :scope="replScope" :visible="tab==='run'"></replacement-rules>
           </div>
         </div>
       </div>
