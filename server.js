@@ -2964,7 +2964,7 @@ const server = http.createServer((req, res) => {
     serveFile(path.join(__dirname, 'index.html'), req, res); return;
   }
   // Shared static assets (explicit allowlist — no generic file serving)
-  if ((pn === '/common.css' || pn === '/app.css' || pn === '/ui-guards.js' || pn === '/auth-ui.js'
+  if ((pn === '/common.css' || pn === '/app.css' || pn === '/ui-guards.js'
        || pn === '/logo-home.webp'
        // The tab icon, in the three shapes a browser might ask for. /favicon.ico
        // is here because browsers request it whether or not a page links to one,
@@ -3001,14 +3001,6 @@ const server = http.createServer((req, res) => {
     res.writeHead(404); res.end('Not found'); return;
   }
 
-  // Serve metadata viewer page
-  if (pn === '/inspect-page') {
-    // Static page — reads path/name/type from its own query params
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    serveFile(path.join(__dirname, 'inspect.html'), req, res); return;
-  }
 
   // API: Save debug results
   if (pn === '/api/debug-results' && req.method === 'POST') {

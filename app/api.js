@@ -129,10 +129,8 @@ export const api = {
   // turned the filter off used to hand that state to whoever unlocked this browser
   // next. On is also its default, so this cannot surprise anyone the other way.
   //
-  // Here rather than in the buttons because there are three of them -- AppShell,
-  // AppToolbar, and inspect.html's own via auth-ui.js -- and this is the one call
-  // the first two share. auth-ui.js keeps its own copy: it is a plain script on a
-  // page that never loads these modules, so it cannot reach this.
+  // Here rather than in the buttons because there are two of them -- AppShell and
+  // AppToolbar -- and this is the one call they share.
   //
   // Before the request, not after: the reset should hold even when the POST fails,
   // and both callers reload regardless of the outcome.

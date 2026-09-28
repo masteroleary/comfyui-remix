@@ -12,7 +12,7 @@ node server.js 8080 /path/to/media # override port and media root
 ```
 
 - After editing **server.js**, restart the server (`npm run restart`) for changes to take effect.
-- Everything under `app/`, plus `index.html`, `inspect.html` and the stylesheets, is served straight from disk; just reload the browser, no restart needed.
+- Everything under `app/`, plus `index.html` and the stylesheets, is served straight from disk; just reload the browser, no restart needed.
 
 ## Architecture
 
@@ -801,7 +801,7 @@ Optional, off by default (`config.auth`). Implemented entirely in server.js as a
 - Reachable while locked: `GET /api/auth/status`, `POST /api/auth/login`, `POST /api/auth/logout`. Everything else gets the server-rendered lock screen (any non-`/api/` navigation, so a deep link still lands where it meant to) or a bare `401`. The WS upgrade handler checks the same predicate.
 - The lock screen is a self-contained HTML string in server.js (`LOGIN_PAGE`) — with the gate on, `common.css` and the vendored Vue are behind it too, so it can't reference them. It submits on keyup (debounced) and reloads on success.
 - Sessions are a signed expiry (`<exp>.<hmac>`), not a session table: restarts don't sign anyone out. The HMAC key derives from the password hash, so changing or clearing the password invalidates every outstanding session — which is why `/api/settings` re-issues a cookie to the browser that just saved.
-- The front end contributes only a logout button: each page carries a `#logoutBtn` that `auth-ui.js` reveals — by toggling `.auth-on` on `<html>` (rule in common.css), with a delegated click handler — when `/api/auth/status` says a password is in use. Neither half may hold a reference to the button or set an inline style on it: index.html's copy is inside a Vue in-DOM template, and Vue discards that node on mount and builds a fresh one.
+- The front end contributes only a logout button: `AppShell` renders it (and `AppToolbar` its own) when `store.authEnabled` says a password is in use, and mirrors that onto `<html>` as `.auth-on` — the class the corner controls key off to move clear of it (the settings gear in `app.css`, the inspect top bar in `inspect.css`). With nothing setting that class, the gear sits exactly on top of logout.
 - The Security page detects a server with no `security` block in `/api/settings` and refuses to pretend: pre-gate builds answer `ok:true` to a password save and drop it, which looks exactly like success.
 - Minimum length is 7, enforced in both `/api/settings` (`AUTH_MIN_LEN`) and the Security page, which keeps the enable toggle disabled until a long-enough password exists.
 

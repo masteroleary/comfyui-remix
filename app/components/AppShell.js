@@ -11,7 +11,7 @@ import { runningCount, leadPct } from './RemixDialog.js';
 import MoveDialog from './MoveDialog.js';
 import MergeDialog from './MergeDialog.js';
 
-const { computed, onMounted, onUnmounted, ref, defineAsyncComponent } = window.Vue;
+const { computed, onMounted, onUnmounted, ref, watchEffect, defineAsyncComponent } = window.Vue;
 
 // The remix dialog pulls in the ComfyUI job engine on import, so it loads on
 // first use rather than on every page load.
@@ -32,6 +32,12 @@ export default {
     const overlayUp = computed(() => !!(store.ui.remix || store.ui.move
       || store.ui.merge || confirmBox.value || route.name === 'view'));
     const confirmBox = ref(null);   // { title, body, ok, run } or null
+    // `html.auth-on` is what moves the corner controls clear of the logout
+    // button (the settings gear in app.css, the inspect top bar in inspect.css).
+    // auth-ui.js set it for the pre-SPA pages and went with the last of them;
+    // nothing had taken the job over, so with a password set the gear sat
+    // exactly on top of logout.
+    watchEffect(() => document.documentElement.classList.toggle('auth-on', !!store.authEnabled));
 
     async function logout() {
       // Reload either way: on success the server answers the next request with

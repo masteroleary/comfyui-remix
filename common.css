@@ -57,12 +57,3 @@ body{
   -webkit-font-smoothing:antialiased;
   -moz-osx-font-smoothing:grayscale;
 }
-
-/* ── Logout button ──────────────────────────────────────────────────────────
-   Hidden until auth-ui.js confirms a password is actually in use. The switch is
-   a class on <html> rather than the button's own style because index.html's copy
-   lives inside a Vue in-DOM template: Vue throws the original node away on mount
-   and builds a fresh one, taking any inline style we'd set with it. Hiding from
-   an ancestor also lets each page keep its own display value (.blur-btn is a
-   flex child, .btn is inline-flex) instead of forcing one on all of them. */
-html:not(.auth-on) #logoutBtn{display:none!important}

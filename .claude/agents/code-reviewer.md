@@ -10,7 +10,7 @@ What the codebase actually is, because it changes what counts as a finding:
 
 - **`server.js`** — a single ~4000-line HTTP server built on Node builtins only. No framework, no router library, no ORM, no database. Requests are matched by a linear chain of `if (pn === '/api/x' && req.method === 'POST')` blocks; JSON comes back through `jsonRes(res, obj, status)`.
 - **Persistence is JSON files on disk** (`app-workflows.json`, `config.json`, `app-prompt-index.json`, …) plus the media tree itself. There is no schema, no migrations, no transactions.
-- **Front end is static HTML served straight from disk** — `index.html` (~4600 lines of markup + CSS + app JS), `inspect.html`, `jobs.html`, `chat.html`, `voice.html`, plus `common.css`, `key-prompt.js`, `ui-guards.js`. Vue 3 is the **global build** loaded from `/vendor/`; templates are runtime-compiled strings. There is **no build step and no TypeScript**.
+- **Front end is a single-page app served straight from disk** — `index.html` is a small shell; the app is native ES modules under `app/` (router, store, `views/`, `components/`), plus `common.css`, `app.css` and `ui-guards.js`. Vue 3 is the **global build** loaded from `/vendor/`; templates are runtime-compiled strings. There is **no build step and no TypeScript**.
 - **Zero runtime dependencies** is a hard project constraint — `package.json` has no `dependencies` block at all.
 - The app is meant to be reachable only from localhost and a private VPN, so most endpoints are unauthenticated **by design**. That is a deliberate posture, not an oversight.
 
