@@ -21,6 +21,7 @@
 import { fileUrl } from '../api.js';
 import { autosize } from '../autosize.js';
 import MediaBrowser from './MediaBrowser.js';
+import ComboSearch from './ComboSearch.js';
 import { SKIP_KEY } from '../replacements.js';
 
 const { reactive, ref, computed, watch, inject, provide } = window.Vue;
@@ -155,6 +156,7 @@ const PromptSwitch = {
 const FieldControl = {
   name: 'FieldControl',
   directives: { autosize },
+  components: { ComboSearch },
   props: ['field'],
   setup(props) {
     const loraExpanded = ref(false);
@@ -238,7 +240,12 @@ const FieldControl = {
     // high/low pair — the only way loras get added now that the search-and-add
     // box is gone, since it just dumped every lora the server had cached.
     function addFromLibrary(lora) { if (addLoraRow) addLoraRow(props.field, lora); }
-    return { t: computed(() => ctype(props.field)), locked, shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
+    // A model list is long and spelled as paths into subfolders, so it gets the
+    // searchable picker; so does any other combo too long to scroll. Short ones
+    // (sampler, scheduler) stay a plain dropdown.
+    const comboOpts = computed(() => (props.field.control && props.field.control.options) || [props.field.value]);
+    const searchable = computed(() => ['model', 'vae'].includes(props.field.kind) || comboOpts.value.length > 15);
+    return { t: computed(() => ctype(props.field)), comboOpts, searchable, locked, shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
   },
   template: `
     <textarea v-if="t==='multiline'" v-autosize class="rmx-inp rmx-ta" style="width:100%" rows="2" v-model="field.value"></textarea>
@@ -253,7 +260,9 @@ const FieldControl = {
     <input v-else-if="t==='boolean'" type="checkbox" v-model="field.value" style="width:16px;height:16px;accent-color:#0a84ff">
     <input v-else-if="t==='int' || t==='float'" type="number" class="rmx-inp" style="width:120px" :step="t==='float' ? '0.01' : '1'" v-model="field.value"
            :disabled="locked" :title="locked ? 'Coming from the input image — untick Match Input Image to set it here' : null">
-    <select v-else-if="t==='combo'" class="rmx-inp" v-model="field.value"><option v-for="o in (field.control&&field.control.options||[field.value])" :key="o" :value="o">{{ o }}</option></select>
+    <ComboSearch v-else-if="t==='combo' && searchable" v-model="field.value" :options="comboOpts"
+                 :placeholder="field.kind==='model' ? 'Search models and folders…' : 'Search…'" />
+    <select v-else-if="t==='combo'" class="rmx-inp" v-model="field.value"><option v-for="o in comboOpts" :key="o" :value="o">{{ o }}</option></select>
     <div v-else-if="t==='lora_rows'" class="rmx-loras">
       <div v-for="e in visibleLoras" :key="e.i" class="rmx-lora" :class="{off: !e.r.on, sug: !!e.match}">
         <input type="checkbox" v-model="e.r.on"><label :title="e.r.lora">{{ shortLora(e.r.lora) }}</label>

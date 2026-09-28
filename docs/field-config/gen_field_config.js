@@ -403,7 +403,10 @@ function finalizeConfig(store, reachable) {
     }
   }
 
-  const AUTO_ON = { prompt: 0.8, seed: 0.8, steps: 0.8, cfg: 0.8, lora_list: 0.8, length: 0.8, width: 0.8, height: 0.8, size_preset: 0.8, image_input: 0.9 };
+  // model: 0.7 is the model-loader rule's own confidence, so a checkpoint/UNET
+  // loader in the executing graph shows its Model field by default; one found
+  // deep inside a subgraph (0.6) still waits to be ticked.
+  const AUTO_ON = { prompt: 0.8, seed: 0.8, steps: 0.8, cfg: 0.8, lora_list: 0.8, length: 0.8, width: 0.8, height: 0.8, size_preset: 0.8, image_input: 0.9, model: 0.7 };
   for (const f of store.fields) {
     if (!f.recommended && AUTO_ON[f.kind] != null && f.confidence >= AUTO_ON[f.kind]) f.recommended = true;
     if (f.zoneClass === 'internal' || f.inactive || f.unreachable) f.recommended = false;

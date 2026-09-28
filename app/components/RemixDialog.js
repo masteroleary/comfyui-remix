@@ -16,7 +16,7 @@
 // here only because this is the first component that needed it; it is exported
 // so the next one imports rather than re-creates it (two engines in one page
 // would fight over the ComfyUI client id). Lift it to app/jobs.js when Jobs lands.
-import { store, showToast } from '../store.js';
+import { store, showToast, setBlur } from '../store.js';
 import { api, fileUrl, thumbUrl } from '../api.js';
 import MediaToolsMenu from './MediaToolsMenu.js';
 import MediaTile from './MediaTile.js';
@@ -1542,7 +1542,7 @@ export default {
       canUpdateWf, wfUpdating, wfUpdated, updateWorkflow, meta, job, isVideo, mediaUrl, toolsMenu, toolItem, remix, cancelJob, close, saveMsg, nodeFilter, saveLog, filteredNodes, nodeInputs,
       nodeEdits, editVal, setEdit,
       resultTiles, openResultFile, remixResult, pendingSlots, prog, wfSave, wfNameTaken, openWfSave, saveEmbeddedWf,
-      wfLib, wfLibShown, wfLibCount, wfLibDupes, openWfLib, saveWfLib, addUnlistedWf, fileUrl };
+      wfLib, wfLibShown, wfLibCount, wfLibDupes, openWfLib, saveWfLib, addUnlistedWf, fileUrl, setBlur };
   },
   template: `
     <div class="rmx-overlay" data-backdrop @click.self="close">
@@ -1558,6 +1558,9 @@ export default {
               <button :class="{on: tab==='run'}" @click="tab='run'">Run</button>
               <button :class="{on: tab==='preview'}" @click="tab='preview'">Preview</button>
             </div>
+            <!-- The browse toolbar's blur switch is under the overlay, and the
+                 output tiles below follow the same setting, so it is repeated here. -->
+            <button class="rmx-blur" :class="{on: store.blurOn}" :title="store.blurOn ? 'Unblur thumbnails' : 'Blur thumbnails'" @click="setBlur(!store.blurOn)"><span v-if="store.blurOn">🔒</span><span v-else>🔓</span></button>
             <button class="rmx-x" @click="close" title="Close (Esc)">✕</button>
           </div>
           <div class="rmx-head-file" :title="src.name">{{ src.name }}</div>

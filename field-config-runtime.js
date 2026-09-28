@@ -67,6 +67,15 @@ module.exports = function createFieldConfigRuntime(deps) {
       const def = (info.input.required && info.input.required[t.widget]) || (info.input.optional && info.input.optional[t.widget]);
       if (def && Array.isArray(def[0]) && def[0].length) {
         const opts = def[0].slice();
+        // A workflow saved on Windows spells a model in a subfolder with a
+        // backslash (Manga\x.safetensors); ComfyUI in Docker lists it with a
+        // forward one. Same file — so take the list's spelling rather than
+        // offering both, and send ComfyUI the one its own list contains.
+        if (typeof f.value === 'string' && !opts.includes(f.value)) {
+          const slash = s => String(s).replace(/\\/g, '/');
+          const same = opts.find(o => typeof o === 'string' && slash(o) === slash(f.value));
+          if (same !== undefined) f.value = same;
+        }
         if (f.value != null && !opts.includes(f.value)) opts.unshift(f.value);   // keep a stale/renamed value selectable
         f.control = Object.assign({}, f.control, { options: opts });
       }
