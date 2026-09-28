@@ -13,8 +13,8 @@
 //
 // Renders on browse routes only; the shell decides where it goes.
 import {
-  store, TYPES, THUMB_SIZES, ROOT_DEFS, setBlur, setSafe, setThumbSize, showToast,
-  clearSelection, exitMultiSelect,
+  store, TYPES, THUMB_SIZES, PAGE_SIZES, ROOT_DEFS, setBlur, setSafe, setThumbSize, setPageSize, showToast,
+  clearSelection, exitMultiSelect, reload,
   crumbs, sortLabel, filterCount, selectedCount, onHome,
 } from '../store.js';
 import { api } from '../api.js';
@@ -185,6 +185,18 @@ export default {
       id, label: id.toUpperCase(), title: TILE_TITLES[id] || id,
     })));
 
+    // ── Page size ───────────────────────────────────────────────────────────
+    // A native <select>: it shows just the current number, and a tap opens the
+    // choices — the OS picker on a phone, which a hand-rolled menu would only
+    // imitate. A new size re-slices the listing, so page 7 of 10 may not exist
+    // any more; it goes back to page 1, and when already there it re-lists in
+    // place (the URL does not change, so the route watcher would not fire).
+    function pickPageSize(n) {
+      if (!setPageSize(n)) return;
+      if (store.page > 1) router.push(browseTo({ page: 1 }, browseQuery(route, store.roots), store.roots));
+      else reload();
+    }
+
     // ── Stats ───────────────────────────────────────────────────────────────
     const stats = computed(() => store.total + ' item' + (store.total !== 1 ? 's' : ''));
     const pageInfo = computed(() => (store.pages > 1 ? 'Page ' + store.page + ' / ' + store.pages : ''));
@@ -286,7 +298,7 @@ export default {
       back, backDisabled, goHome, toggleBlur, toggleSafe,
       q, locked, nfName, unlock, onSearchInput, commitSearch, clearSearch,
       cycleSort, toggleFilters, setType, toggleFlatten,
-      fileTabs, showFileTabs, clickTab, tileSizes, setThumbSize, stats, pageInfo,
+      fileTabs, showFileTabs, clickTab, tileSizes, setThumbSize, PAGE_SIZES, pickPageSize, stats, pageInfo,
       toggleSelect, bulkSelAll, bulkSelFiles, bulk,
       bulkDirCount, bulkFileCount, bulkVideoCount,
       words, wordFilter, wordList, openWords, closeWords, pickWord,
@@ -415,9 +427,15 @@ export default {
           </div>
         </div>
         <div class="bs-mid"><Pager /></div>
-        <div class="rmx-tabs tile-switch">
-          <button v-for="s in tileSizes" :key="s.id" :class="{on: store.thumbSize === s.id}"
-                  :title="s.title" @click="setThumbSize(s.id)">{{ s.label }}</button>
+        <div class="bs-end">
+          <select class="page-size" :value="store.limit" title="Items per page"
+                  @change="pickPageSize($event.target.value)">
+            <option v-for="n in PAGE_SIZES" :key="n" :value="n">{{ n }}</option>
+          </select>
+          <div class="rmx-tabs tile-switch">
+            <button v-for="s in tileSizes" :key="s.id" :class="{on: store.thumbSize === s.id}"
+                    :title="s.title" @click="setThumbSize(s.id)">{{ s.label }}</button>
+          </div>
         </div>
       </div>
 

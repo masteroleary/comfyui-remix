@@ -17,6 +17,9 @@ const writeLs = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 // them and the guard that validates a stored one read the same list — a fourth
 // size added here shows up in the switch without being named twice.
 export const THUMB_SIZES = ['m', 'l', 'xl'];
+// Items per page in the grid, chosen beside the tile size. Read back through the
+// allowed set for the same reason thumbSize is: it comes out of localStorage.
+export const PAGE_SIZES = [10, 25, 50];
 
 // Slideshow cadence, slowest → fastest; ‹ › become − + while playing.
 export const SLIDE_STEPS = [8000, 5000, 3000, 2000, 1500, 1000, 700, 500];
@@ -64,7 +67,8 @@ export const store = reactive({
   // path in the address bar is unreadable, leaks the server's layout, and every
   // bookmark breaks the day mediaDir moves.
   roots: { fav: '', out: '', in: '' },
-  page: 1, limit: 48, total: 0, pages: 0,
+  page: 1, limit: PAGE_SIZES.includes(num(readLs('archivePageSize', '50'), 50)) ? num(readLs('archivePageSize', '50'), 50) : 50,
+  total: 0, pages: 0,
   search: '', sort: 'date', asc: false, type: 'all',
   flatten: false,           // recursive grouped view of the current dir
   items: [],                // current page, as returned
@@ -121,6 +125,12 @@ export function setSafe(on) { store.safeOn = !!on; writeLs('archiveSafe', on ? '
 export function setThumbSize(s) {
   if (!THUMB_SIZES.includes(s)) return;
   store.thumbSize = s; writeLs('archiveThumbSize', s);
+}
+export function setPageSize(n) {
+  n = num(n, 0);
+  if (!PAGE_SIZES.includes(n)) return false;
+  store.limit = n; writeLs('archivePageSize', String(n));
+  return true;
 }
 
 // ── Reload hook ─────────────────────────────────────────────────────────────

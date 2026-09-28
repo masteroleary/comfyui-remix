@@ -113,7 +113,18 @@
 }
 .bs-side{min-width:0;display:flex;justify-content:flex-start}
 .bs-mid{min-width:0;display:flex;justify-content:center}
-.browse-switch .tile-switch{justify-self:end}
+.browse-switch .bs-end{justify-self:end;display:flex;align-items:center;gap:6px}
+/* Items per page: a native select dressed as the .rmx-tabs box beside it, so the
+   two read as one cluster. The box shows the current number only; the OS draws
+   the list when it is tapped. */
+.browse-switch .page-size{
+  -webkit-appearance:none;appearance:none;
+  background:#0a0a0a;border:1px solid #2c2c2e;border-radius:8px;
+  color:#8e8e93;font-size:12px;font-weight:600;font-family:inherit;
+  padding:7px 10px;line-height:1;cursor:pointer;text-align:center;text-align-last:center;
+}
+.browse-switch .page-size:hover{color:#f2f2f7}
+.browse-switch .page-size option{background:#1c1c1e;color:#f2f2f7}
 /* Both switches are remix.css's .rmx-tabs. Only the widths differ: root labels
    are words and may need to ellipsis on a narrow phone, the size labels are two
    letters and should never shrink. */
@@ -136,7 +147,7 @@
 @media (max-width:700px){
   .browse-switch{grid-template-columns:1fr auto;row-gap:8px}
   .bs-side{grid-area:1 / 1}
-  .browse-switch .tile-switch{grid-area:1 / 2}
+  .browse-switch .bs-end{grid-area:1 / 2}
   .bs-mid{grid-area:2 / 1 / 3 / 3}
 }
 
