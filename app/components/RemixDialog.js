@@ -202,8 +202,23 @@ export function mediaSize(path) {
     }
   });
 }
+// Uploads are named by what is in them, so one picture is one file in
+// ComfyUI's input folder however many runs send it: the second reference you
+// keep reusing, the source a batch sends N times. They were named by the clock,
+// and every run left another identical copy behind. Same name means same bytes,
+// so overwrite=true rewrites a file with itself, and LoadImage's own change check
+// (which hashes the file) never sees a name that changed meaning — the stale-
+// cache worry the timestamp was there for cannot arise. crypto.subtle only
+// exists on a secure origin (HTTPS, localhost); anywhere else it falls back to
+// the timestamp, which is duplicates rather than a failed run.
+async function contentName(blob, ext) {
+  try {
+    const d = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+    return 'app_input_' + Array.from(d.slice(0, 12), b => b.toString(16).padStart(2, '0')).join('') + '.' + ext;
+  } catch (e) { return 'app_input_' + Date.now() + '.' + ext; }
+}
 async function uploadBlob(blob, ext) {
-  const uploadName = 'app_input_' + Date.now() + '.' + (ext || 'png');
+  const uploadName = await contentName(blob, String(ext || 'png').toLowerCase());
   const fd = new FormData(); fd.append('image', blob, uploadName); fd.append('overwrite', 'true');
   const r = await fetch('/api/comfy/upload/image', { method: 'POST', credentials: 'same-origin', body: fd });
   if (!r.ok) return null;
@@ -771,6 +786,11 @@ function prefillFromEmbedded(fields, wfGraph) {
     const t = (f.targets || [])[0]; if (!t || (t.path && t.path.length)) continue;
     const node = byNodeId[String(t.nodeId)]; if (!node) continue;
     if (t.class && node.type && node.type !== t.class) continue;   // guard against id collisions
+    // An optional image switches its branch on by being filled in, so it only
+    // takes the file's value when that run had the branch on. A bypassed loader
+    // still records its placeholder filename, and copying it would switch the
+    // branch on for a run the file never made.
+    if (f.meta && f.meta.activates && node.mode !== 0 && node.mode != null) continue;
     const wv = node.widgets_values;
     if (f.kind === 'lora_list') {
       if (Array.isArray(wv)) { const rows = []; wv.forEach((item, idx) => { if (item && typeof item === 'object' && 'lora' in item) rows.push({ slot: idx, on: !!item.on, lora: item.lora, strength: item.strength != null ? item.strength : 1, strengthTwo: item.strengthTwo }); }); if (rows.length) f.value = rows; }
@@ -1169,8 +1189,14 @@ export default {
           // one and this is how you reach what actually ran, a named workflow
           // opens on what ran and this is how you get the keywords back.
           cfg.promptAlt = promptAlternatives(meta.embedded, meta.embeddedWf);
+          // An instruction prompt ("replace this person with …") is about the
+          // image going in, so another workflow's description of its output is
+          // never one — it keeps the workflow's own text unless this file was
+          // made by this same workflow, whose instruction it then is.
+          cfg.promptRole = c.promptRole || '';
+          const ownInstruction = c.promptRole !== 'instruction' || wf.value === meta.matchedWf;
           if (wf.value !== '__inherit__' && !isShortcut(wf.value)) {
-            if (meta.prompt) { const pf = c.fields.find(f => f.kind === 'prompt' && !f.variant); if (pf) pf.value = meta.prompt; }
+            if (meta.prompt && ownInstruction) { const pf = c.fields.find(f => f.kind === 'prompt' && !f.variant); if (pf) pf.value = meta.prompt; }
             // The seed the media was actually made with — kept as the value behind
             // the "↺ this file's seed" button and never dropped into the box. In
             // the box it would read as if the re-run were pinned to it, and it
@@ -1204,8 +1230,11 @@ export default {
       // exists once the new config has been rendered into cfg.fields, and the
       // watcher does not await this. A load that has been overtaken leaves the
       // ask alone for the load that overtook it to answer.
+      // An instruction workflow's own prompt is the only one that fits it, so
+      // there is nothing to choose between.
       if (pendingPromptAsk && pendingPromptAsk.forWf === wf.value) {
-        const a = pendingPromptAsk; pendingPromptAsk = null; offerPromptChoice(a.prev);
+        const a = pendingPromptAsk; pendingPromptAsk = null;
+        if (cfg.promptRole !== 'instruction') offerPromptChoice(a.prev);
       }
     }
     // ── Save the inherited workflow into the app ───────────────────────
@@ -1305,6 +1334,10 @@ export default {
       const matchSizeFor = from => (cfg.matchSize && cfg.matchInput
         ? { width: cfg.matchSize.width, height: cfg.matchSize.height, from: from || '' }
         : null);
+      // An optional image (a second reference) is never the frame: the size
+      // comes off the image being edited, so it is skipped when picking `from`.
+      const optionalImage = id => { const f = cfg.fields.find(x => x.id === id); return !!(f && f.meta && f.meta.activates); };
+      const sizeFrom = mf => (mf.find(m => !optionalImage(m.id)) || {}).value;
       const runs = parseInt(runCount.value, 10) || 1;
       const s = src.value;
       // Several enabled rules for one keyword are alternatives, so the run fans
@@ -1330,7 +1363,7 @@ export default {
           .filter(r => multi.has(pickKeyOf(r)))
           .map(r => r.from + ' → ' + String(replacementText(r)).replace(/\s+/g, ' ').trim().slice(0, 28))
           .join(' · '));
-      const base = { workflowFile: wf.value, workflowLabel: label, embeddedWf: inherit ? meta.embeddedWf : null, source: { path: s.path, name: s.name, type: s.type }, promptText: pf ? applyReplacements(pf.value) : '', loras: loras.length ? loras : null, preset: selectedPreset.value, seedPinned, nodeEdits: edits, runs, matchSize: matchSizeFor(mediaFields[0] && mediaFields[0].value) };
+      const base = { workflowFile: wf.value, workflowLabel: label, embeddedWf: inherit ? meta.embeddedWf : null, source: { path: s.path, name: s.name, type: s.type }, promptText: pf ? applyReplacements(pf.value) : '', loras: loras.length ? loras : null, preset: selectedPreset.value, seedPinned, nodeEdits: edits, runs, matchSize: matchSizeFor(sizeFrom(mediaFields)) };
       // The prompt the job record shows is the one that job actually sends, so
       // it is built per variation rather than once from the whole rule list.
       const launch = (extra, v, n) => launchJob(Object.assign({}, base, extra, {
@@ -1350,7 +1383,7 @@ export default {
           const mf = mediaFields.filter(m => m.id !== bf.id).concat([{ id: bf.id, value: file, type: 'image' }]);
           variations.forEach((v, n) => {
             const id = launch({
-              fieldValues: fv, mediaFields: mf, matchSize: matchSizeFor(file),
+              fieldValues: fv, mediaFields: mf, matchSize: matchSizeFor(optionalImage(bf.id) ? sizeFrom(mf) : file),
               displaySource: { path: file, name: String(file).split(/[\\/]/).pop() },
             }, v, n);
             if (!firstId) firstId = id;

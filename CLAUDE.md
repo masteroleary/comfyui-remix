@@ -102,6 +102,16 @@ usually the same bug: something the host provided instead of the component.
   structure, and a style preset lifts mutes at run time — hiding a field the
   preset you are about to pick will bring to life is a worse failure than listing
   one that is asleep.
+  The one bypassed node that *is* offered as a live control is a **bypassed
+  `LoadImage`** whose branch feeds the render — the workflow's way of saying
+  "a second image, if you have one" (Krea2's second reference). It arrives
+  enabled and empty, and the picker is the switch: empty leaves the graph as
+  saved, a picked image sets the loader and the bypassed nodes of its own group
+  to mode 0 for that run (`meta.activates`, applied in
+  `applyFieldConfigOverrides`). The group bounds it because following the chain
+  further switched on unrelated bypassed nodes downstream (APP REAL's refiner).
+  An embedded graph only prefills it when its run had the branch on, and Match
+  Input Image never measures it — the frame is the image being edited.
   It also owns **Keyword Prompt | Remix Prompt**, the switch above the prompt
   field. A file ComfyUI wrote holds this prompt twice — the `prompt` chunk it
   executed, and the `workflow` chunk the client sent as pnginfo, which is the
@@ -179,7 +189,13 @@ only assignment to `wf` that is a user changing their mind, where the other six
 (opening a file, adding a recognised workflow, saving a shortcut, exporting a
 graph, the library panel, deleting a shortcut) are the app moving the selection
 itself. A **shortcut** never asks — its prompt *is* what was saved, so picking
-one loads it outright.
+one loads it outright. Nor does a workflow whose file declares
+`extra.comfyremix.promptRole: "instruction"` (APP Krea2 Identity Edit): its
+prompt is an edit instruction for the image going in, so another workflow's
+description is never the right text for it. It opens on its own template, and
+both hosts skip seeding the opened file's prompt into it too — unless the file
+is one of that workflow's own outputs, whose instruction it then is. The
+server reads the flag in `buildFieldConfig` and hands it on as `cfg.promptRole`.
 
 **Everything that runs goes through `launchJob`** — the inspect page included.
 It used to run its own socket, uploader and output poller inside a component,

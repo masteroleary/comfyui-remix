@@ -21,6 +21,13 @@ module.exports = function createFieldConfigRuntime(deps) {
     try { cfg = isApi ? generator.detectApi(wf, wfName) : generator.detectGraph(wf, wfName); }
     catch (e) { return { version: 1, workflow: wfName, format: 'error', fields: [], zones: [], presets: [], skipped: [], error: e.message }; }
     cfg.workflowMtime = mtimeMs || 0;
+    // What the workflow's prompt *is*, declared in the file (extra.comfyremix) so
+    // it travels with a bundled copy. 'instruction' = an edit instruction for the
+    // image going in ("replace this person with …"), not a description of the
+    // output — so the hosts never carry another workflow's or another file's
+    // description into it, and switching to it does not ask which to keep.
+    const app = !isApi && wf.extra && wf.extra.comfyremix;
+    if (app && app.promptRole === 'instruction') cfg.promptRole = 'instruction';
     const saved = (loadStore().fieldConfigs || {})[wfName];
     cfg.savedEdits = (saved && saved.edits) || {};
     if (saved) {
@@ -206,6 +213,13 @@ module.exports = function createFieldConfigRuntime(deps) {
       // changes nothing — the classic "I set Width and the video came out the old
       // aspect" trap. Say so instead of letting the run look like it obeyed.
       if (f.unreachable) warnings.push(`${fid} targets a node outside the executing graph — the value had no effect`);
+
+      // An optional image (a bypassed loader): filling it in is what switches
+      // its branch on. Empty leaves the workflow exactly as it was saved.
+      if (f.meta && Array.isArray(f.meta.activates)) {
+        if (rawVal === '' || rawVal == null) continue;
+        for (const id of f.meta.activates) if (byId[String(id)]) byId[String(id)].mode = 0;
+      }
 
       const val = coerceFieldValue(f, rawVal);
       for (const t of f.targets || []) {

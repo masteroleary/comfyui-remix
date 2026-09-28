@@ -280,8 +280,12 @@ const FieldControl = {
       <div v-else-if="hiddenCount || loraExpanded" class="rmx-lora-more" @click="loraExpanded=!loraExpanded"><span>{{ loraExpanded ? 'Hide disabled loras' : ('＋ ' + hiddenCount + ' more lora' + (hiddenCount===1?'':'s')) }}</span><span class="rmx-lora-arrow" :class="{open: loraExpanded}">▾</span></div>
     </div>
     <span v-else-if="t==='image' || t==='video' || t==='audio'" class="rmx-imgf">
-      <input type="text" class="rmx-inp" style="width:200px" v-model="field.value">
+      <input type="text" class="rmx-inp" style="width:200px" v-model="field.value"
+             :placeholder="field.control && field.control.optional ? 'optional — empty leaves it off' : null"
+             :title="field.control && field.control.optional ? 'The node behind this image is bypassed in the workflow. Picking one switches it on for the run; leaving it empty keeps it off.' : null">
       <button v-if="openPicker && t==='image'" type="button" class="rmx-btn2" @click="openPicker(field)">🖼 Browse</button>
+      <button v-if="field.control && field.control.optional && (field.value || (field.values && field.values.length))" type="button" class="rmx-btn2"
+              @click="field.value = ''; if (field.values) field.values = []" title="Clear — the node stays bypassed">✕</button>
       <img v-if="t==='image' && field.value && !(field.values && field.values.length)" :key="field.value" :src="fileUrl(field.value)" @error="$event.target.style.display='none'" title="Selected image">
       <span v-if="t==='image' && field.values && field.values.length" class="rmx-mut" style="font-size:11.5px">{{ field.values.length }} files · one job each</span>
       <div v-if="t==='image' && field.values && field.values.length" class="rmx-picked">

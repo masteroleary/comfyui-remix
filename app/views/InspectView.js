@@ -257,6 +257,9 @@ export default {
     const hasInherit = ref(true);
     const wfName = ref(LS.get('archiveWorkflowSelect') || 'inherit');
     const savedWorkflow = LS.get('archiveWorkflowSelect');
+    // Set by applyBoot on every arrival that is not a round trip to the viewer,
+    // and spent by recognizeWorkflow: the file's own graph picks the workflow.
+    let freshFile = false;
     const runCount = ref(LS.get('archiveRunCount') || '1');
     const showRun = ref(false);
     // The Run tab goes away with showRun (a file with no metadata and no app
@@ -343,23 +346,39 @@ export default {
 
 
     // Structural recognition: if this file's graph matches an enabled APP
-    // workflow (same nodes/wiring, values may differ), switch off Inherit and
-    // preload the controls with the file's own prompt/seed/LoRAs/preset.
+    // workflow (same nodes/wiring, values may differ), select it and preload
+    // the controls with the file's own prompt/seed/LoRAs/preset.
+    //
+    // A file that has just been opened is identified by its own graph, whatever
+    // the dropdown was left on. It used to run only when the dropdown sat on
+    // Inherit, and the dropdown starts on the remembered selection — the last
+    // workflow run from this page — so any file opened after a run here came up
+    // on that one: a Krea2 edit of the ANIMA demo image reopened as ANIMA T2I.
+    // A graph nothing matches lands on Inherit, as it does in the Remix dialog.
+    // A round trip to the viewer is not an arrival and keeps what was on screen.
     async function recognizeWorkflow(wf) {
-      if (wfName.value !== 'inherit') return false;
+      const fresh = freshFile; freshFile = false;
+      if (!fresh && wfName.value !== 'inherit') return false;
       try {
-        const r = await postJson('/api/workflow-match', { workflow: wf });
-        if (!r.ok) return false;
-        const m = await r.json();
-        if (!m || !m.name) return false;
         await wfReady;
-        if (wfName.value !== 'inherit') return false;                       // user picked something meanwhile
-        if (!wfOptions.value.some(w => w.name === m.name)) return false;
+        const before = wfName.value;
+        const r = await postJson('/api/workflow-match', { workflow: wf });
+        const m = r.ok ? await r.json() : null;
+        if (wfName.value !== before) return false;                          // user picked something meanwhile
+        if (!m || !m.name || !wfOptions.value.some(w => w.name === m.name)) {
+          if (fresh && before !== 'inherit') { wfName.value = 'inherit'; await loadWorkflowConfig('inherit'); updateApplyBtnVisibility(); }
+          return false;
+        }
         wfName.value = m.name;
         recognizedWf.value = m.name;
         LS.set('archiveWorkflowSelect', m.name);
         await loadWorkflowConfig(m.name);
-        log('Recognized saved workflow "' + (m.label || m.name) + '" (' + Math.round(m.score * 100) + '% match) — switched from Inherit');
+        // Already loaded under this name before the file was recognised, an
+        // instruction workflow kept its own text; now it is known to be this
+        // file's workflow, the instruction that made the file is the right one.
+        if (fieldConfig.value && fieldConfig.value.promptRole === 'instruction') prefillFieldsFromMedia();
+        updateApplyBtnVisibility();
+        log('Recognized saved workflow "' + (m.label || m.name) + '" (' + Math.round(m.score * 100) + '% match)' + (before === 'inherit' ? ' — switched from Inherit' : ''));
 
         return true;
       } catch { return false; }
@@ -384,6 +403,7 @@ export default {
       const target = filePath.value + '|' + wfParam.value;
       const roundTrip = !!expectReturn && expectReturn === target;
       expectReturn = '';
+      freshFile = !roundTrip;
       resetRunState(target, !roundTrip);
       document.title = 'Workflow - ' + (fileName.value || wfLabel.value);
     }
@@ -527,7 +547,10 @@ export default {
       if (!fieldConfig.value) return;
       try {
         const p = extractImagePrompt();
-        if (p && p.trim()) {
+        // Same rule as the dialog: an instruction workflow keeps its own text
+        // unless this file is one of its own outputs.
+        const ownInstruction = fieldConfig.value.promptRole !== 'instruction' || recognizedWf.value === fieldCfgName.value;
+        if (p && p.trim() && ownInstruction) {
           const pf = fieldConfig.value.fields.find(f => f.kind === 'prompt' && !f.variant);
           if (pf) pf.value = p;
         }
@@ -724,7 +747,7 @@ export default {
       // which is why this does not need to filter.
       const cfgNow = fieldConfig.value;
       const matchSize = (cfgNow.matchSize && cfgNow.matchInput)
-        ? { width: cfgNow.matchSize.width, height: cfgNow.matchSize.height, from: (mediaFields[0] && mediaFields[0].value) || '' }
+        ? { width: cfgNow.matchSize.width, height: cfgNow.matchSize.height, from: (mediaFields.find(m => !(fields.find(f => f.id === m.id) || {}).meta?.activates) || {}).value || '' }
         : null;
 
       // Several enabled rules for one keyword are variations of each other, so

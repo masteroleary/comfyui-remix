@@ -728,6 +728,46 @@ function detectGraph(wf, name) {
     }
   }
 
+  // --- optional images ------------------------------------------------------
+  // A bypassed LoadImage wired into the live graph is how a workflow says "a
+  // second image, if you have one": the consumer's input is optional, so with
+  // the loader bypassed it simply arrives empty. That makes the loader a switch,
+  // and the picker is the natural place to throw it — an empty field leaves the
+  // branch bypassed, a picked image switches it on. `activates` is the loader
+  // plus every bypassed node fed from it *inside the loader's own group* (the
+  // VAEEncode beside it); applyFieldConfigOverrides sets those to mode 0. The
+  // group is the unit an author bypasses by hand, and it is the boundary: APP
+  // REAL's face-swap loader feeds straight on into a refiner sampler that is
+  // bypassed for reasons of its own, and following the chain past the group
+  // switched the whole refiner on. A branch that only reaches the render
+  // through another bypassed group is not offered at all. A loader in no group
+  // activates itself alone. Mode 4 only: a muted (mode 2) loader is usually a
+  // style preset's branch, and lifting one of those is the preset dropdown's job.
+  const outLinks = new Map();
+  for (const l of ctx.links.values()) { if (!outLinks.has(l.from)) outLinks.set(l.from, []); outLinks.get(l.from).push(l.to); }
+  for (const n of nodes) {
+    if (n.type !== 'LoadImage' || n.mode !== 4 || !reachable.has(n.id)) continue;
+    const ids = [n.id];
+    const zone = ctx.zoneOf.get(n.id);
+    let feedsLive = false;
+    for (let i = 0; i < ids.length; i++) {
+      for (const to of outLinks.get(ids[i]) || []) {
+        const d = ctx.nodes.get(to);
+        if (!d) continue;
+        if (d.mode === 4) { if (zone && ctx.zoneOf.get(d.id) === zone && !ids.includes(d.id)) ids.push(d.id); }
+        else if (isActive(d) && reachable.has(d.id)) feedsLive = true;
+      }
+    }
+    if (!feedsLive) continue;
+    const f = store.add(baseField(ctx, n, 'image', 'image_input', n.title || 'Optional image', {
+      id: 'image_' + n.id, confidence: 0.85, rule: 'optional-image', value: '',
+      control: { type: 'image', picker: 'gallery', optional: true },
+    }));
+    // Not `inactive`: that means "asleep until a preset wakes it", and this one
+    // wakes the moment it is filled in.
+    if (f) { f.inactive = undefined; f.meta = { defaultSource: 'none', activates: ids }; f.recommended = true; }
+  }
+
   // --- subgraph promoted widgets -------------------------------------------
   // Instance widgets_values aligns with properties.proxyWidgets entries:
   //   ["-1", name]      → promoted def-INPUT widget; value stored on the instance (consumes a wv slot)
