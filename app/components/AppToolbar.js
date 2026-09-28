@@ -13,7 +13,7 @@
 //
 // Renders on browse routes only; the shell decides where it goes.
 import {
-  store, TYPES, THUMB_SIZES, setBlur, setSafe, setThumbSize, showToast,
+  store, TYPES, THUMB_SIZES, ROOT_DEFS, setBlur, setSafe, setThumbSize, showToast,
   clearSelection, exitMultiSelect,
   crumbs, sortLabel, filterCount, selectedCount, onHome,
 } from '../store.js';
@@ -75,8 +75,6 @@ export default {
     // to the root anyway — so they're dropped and the root itself is shown under
     // the name it has on the home screen.
     const rootKey = computed(() => splitRoot(store.dir || '', store.roots).key);
-    const rootDir = computed(() => norm(rootKey.value === 'out' ? store.roots.out : store.roots.fav));
-    const rootLabel = computed(() => (rootKey.value === 'out' ? 'ComfyUI Output' : 'Favorites'));
     // store.crumbs is already root-relative and already headed by the root under
     // its home-screen name, so this is just a pass-through. Slicing it again by
     // the absolute root's segment depth ate every folder in between, leaving a
@@ -168,10 +166,9 @@ export default {
     // The old Files view's tabs, now just "which media root am I in" — the same
     // two roots the home screen offers, addressable because the root key is in
     // the URL. Hidden while searching, as before.
-    const fileTabs = computed(() => [
-      { id: 'out', label: 'ComfyUI Output', dir: store.roots.out },
-      { id: 'fav', label: 'Favorites', dir: store.roots.fav },
-    ].filter(t => t.dir).map(t => ({ ...t, active: t.id === rootKey.value })));
+    const fileTabs = computed(() => ROOT_DEFS
+      .map(d => ({ id: d.key, label: d.label, dir: store.roots[d.key] }))
+      .filter(t => t.dir).map(t => ({ ...t, active: t.id === rootKey.value })));
     const showFileTabs = computed(() => !store.search && fileTabs.value.length > 1);
     function clickTab(t) {
       if (!t.active) go({ dir: t.dir, search: '', flatten: false });

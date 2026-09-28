@@ -62,15 +62,26 @@ function isInside(child, parent) {
 }
 let COMFY_OUTPUT = config.comfyOutput || 'D:\\ComfyUI-Easy-Install\\ComfyUI\\output';
 let COMFY_DIR = config.comfyDir || 'D:\\ComfyUI-Easy-Install\\ComfyUI';
+// ComfyUI's input folder, where uploads and LoadImage sources live. Derived from
+// comfyDir rather than configured: it is the host side of the same mount the
+// workflows resolve through, and the Clean page's backup already assumes it.
+let COMFY_INPUT = path.join(COMFY_DIR, 'input');
 // Mutable so the Settings panel can hot-reload them without a server restart.
 let COMFY_URL = config.comfyUrl || 'http://127.0.0.1:8188';
 
-// The two roots every media handler is allowed to touch. Declared *after* the
+// The roots every media handler is allowed to touch. Declared *after* the
 // roots rather than beside the helpers above, because they close over a "let"
 // that Settings reassigns — up there the ordering was load-bearing and nothing
 // said so, and any top-level use added in between would have thrown.
-const inMediaRoots = p => isInside(p, ROOT) || isInside(p, COMFY_OUTPUT);
-const isMediaRoot = p => normPath(p) === normPath(ROOT) || normPath(p) === normPath(COMFY_OUTPUT);
+const mediaRootList = () => [ROOT, COMFY_OUTPUT, COMFY_INPUT];
+const inMediaRoots = p => mediaRootList().some(r => isInside(p, r));
+const isMediaRoot = p => mediaRootList().some(r => normPath(p) === normPath(r));
+// The roots with any that nest inside another dropped (the first of two equal
+// ones kept), for walks that would otherwise visit the nested one twice.
+const distinctMediaRoots = () => {
+  const all = mediaRootList();
+  return all.filter((r, i) => !all.some((o, j) => j !== i && isInside(r, o) && (!isInside(o, r) || j < i)));
+};
 // Containment above is lexical, which a symlink defeats: a link sitting inside
 // a media root may point anywhere, and a string comparison sees only the link's
 // own path. Handlers that delete or move therefore resolve the real path and
@@ -101,7 +112,7 @@ function reloadConfig() {
   Object.assign(config, fresh);
   COMFY_URL = config.comfyUrl || 'http://127.0.0.1:8188';
   CIVITAI_API_KEY = config.civitaiApiKey || '';
-  if (config.comfyDir) { COMFY_DIR = config.comfyDir; WORKFLOWS_DIR = path.join(COMFY_DIR, 'user', 'default', 'workflows'); }
+  if (config.comfyDir) { COMFY_DIR = config.comfyDir; WORKFLOWS_DIR = path.join(COMFY_DIR, 'user', 'default', 'workflows'); COMFY_INPUT = path.join(COMFY_DIR, 'input'); }
   if (config.comfyOutput) COMFY_OUTPUT = config.comfyOutput;
   if (typeof buildNsfwRe === 'function') NSFW_RE = buildNsfwRe(); // list may have changed
   return true;
@@ -762,7 +773,7 @@ async function buildPromptIndex() {
   const seen = new Set();
   let added = 0, checked = 0, errors = 0;
   try {
-    for (const root of [ROOT, COMFY_OUTPUT]) {
+    for (const root of distinctMediaRoots()) {
       const stack = [root];
       while (stack.length) {
         const dir = stack.pop();
@@ -2240,7 +2251,7 @@ function maintStamp(d) {
 // to do with which folders are ticked today.
 function maintBackupSources(sel) {
   const all = [
-    { key: 'input', name: 'input', from: path.join(COMFY_DIR, 'input') },
+    { key: 'input', name: 'input', from: COMFY_INPUT },
     { key: 'output', name: 'output', from: COMFY_OUTPUT },
     { key: 'media', name: 'Media', from: ROOT },
   ];
@@ -2433,7 +2444,7 @@ function maintRunBackup(destRoot, sel, done) {
 // that is the other page's job, with all of the other page's confirmations.
 function restoreParts() {
   return [
-    { key: 'input', name: 'input', label: 'ComfyUI input', to: path.join(COMFY_DIR, 'input') },
+    { key: 'input', name: 'input', label: 'ComfyUI input', to: COMFY_INPUT },
     { key: 'output', name: 'output', label: 'ComfyUI output', to: COMFY_OUTPUT },
     { key: 'media', name: 'Media', label: 'App media library', to: ROOT },
     // Only the basenames the backup took, straight back to the constants they came from.
@@ -3236,8 +3247,8 @@ runTests();
     const liveKeywords = keywordSetFromRules();
     const rawDir = url.searchParams.get('dir');
     const dir = (rawDir && rawDir.trim()) ? path.resolve(decodeURIComponent(rawDir)) : ROOT;
-    // scope=all searches across BOTH media roots at once (ComfyUI output + the
-    // media/favorites tree) — used by the Files & Media search box, which spans
+    // scope=all searches across every media root at once (ComfyUI output and
+    // input + the media/favorites tree) — used by the Files & Media search box, which spans
     // all three tabs. Plain browsing stays scoped to a single dir.
     const scopeAll = url.searchParams.get('scope') === 'all';
     if (!scopeAll) {
@@ -3258,10 +3269,8 @@ runTests();
     // A search, scope=all, or flatten spans the whole subtree; plain browsing lists one directory.
     const deep = !!search || scopeAll || flatten;
     const items = [];
-    // scope=all seeds both roots (skipping ComfyUI output if it nests under ROOT).
-    const scanQueue = scopeAll
-      ? (isInside(COMFY_OUTPUT, ROOT) ? [ROOT] : [ROOT, COMFY_OUTPUT])
-      : [dir];
+    // scope=all seeds every root (skipping any that nests under another).
+    const scanQueue = scopeAll ? distinctMediaRoots() : [dir];
     let first = true;
     while (scanQueue.length) {
       const d = scanQueue.shift();
@@ -3353,7 +3362,7 @@ runTests();
       // flatten returns the whole subtree in one shot; the SPA lazy-loads thumbs on scroll.
       const pageItems = flatten ? items : items.slice(start, start + limit);
       const parentDir = path.dirname(dir);
-      const isRoot = scopeAll || dir === ROOT || dir === parentDir;
+      const isRoot = scopeAll || isMediaRoot(dir) || dir === parentDir;
 
       jsonRes(res, {
         dir: scopeAll ? ROOT : dir, root: ROOT, parent: isRoot ? null : parentDir,
@@ -3361,6 +3370,9 @@ runTests();
         items: pageItems,
         favoritesDir: FAVORITES_DIR,
         comfyOutputDir: COMFY_OUTPUT,
+        // Only when it exists: an install that has never uploaded anything has no
+        // input folder, and a tab onto a missing folder is an error page.
+        comfyInputDir: fs.existsSync(COMFY_INPUT) ? COMFY_INPUT : '',
       });
     }
     return;
@@ -3773,8 +3785,9 @@ runTests();
       const raw = url.searchParams.get('dir');
       if (!raw || !raw.trim()) {
         const roots = [{ name: path.basename(ROOT) || ROOT, path: ROOT }];
-        // Skip the ComfyUI output root when it already nests under the media root.
+        // Skip a ComfyUI root when it already nests under the media root.
         if (!isInside(COMFY_OUTPUT, ROOT) && fs.existsSync(COMFY_OUTPUT)) roots.push({ name: 'ComfyUI Output', path: COMFY_OUTPUT });
+        if (!isInside(COMFY_INPUT, ROOT) && fs.existsSync(COMFY_INPUT)) roots.push({ name: 'ComfyUI Input', path: COMFY_INPUT });
         jsonRes(res, { dirs: roots.map(r => ({ ...r, hasChildren: hasSubdir(r.path) })) });
         return;
       }
@@ -4943,7 +4956,7 @@ runTests();
       if (!isPng && !isVid) { jsonRes(res, { error: 'Only PNG and video files can carry an embedded workflow' }, 400); return; }
       const abs = path.resolve(filePath);
       if (!inMediaRoots(abs)) {
-        jsonRes(res, { error: 'File must be under the media or ComfyUI output folder' }, 403); return;
+        jsonRes(res, { error: 'File must be under the media folder or a ComfyUI input/output folder' }, 403); return;
       }
       if (!fs.existsSync(abs)) { jsonRes(res, { error: 'File not found' }, 404); return; }
       const wfPath = path.join(WORKFLOWS_DIR, workflowName);

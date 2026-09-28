@@ -7,6 +7,18 @@ import { setSafe } from './store.js';
 
 const enc = encodeURIComponent;
 
+// store.roots out of a listing response. Every listing carries the roots, so the
+// views refresh them from whatever they just fetched; `prev` fills any the
+// response left blank.
+export function rootsFrom(d, prev) {
+  const p = prev || {};
+  return {
+    fav: (d && (d.favoritesDir || d.root)) || p.fav || '',
+    out: (d && d.comfyOutputDir) || p.out || '',
+    in: (d && d.comfyInputDir) || p.in || '',
+  };
+}
+
 async function req(path, opts = {}) {
   const res = await fetch(path, { credentials: 'same-origin', ...opts });
   if (res.status === 401) {
@@ -33,12 +45,9 @@ export const api = {
   // path — anything else is silently ignored and you get the root back, which
   // looks like "the folder is empty of subfolders" rather than like an error.
   list: params => req('/api/list?' + new URLSearchParams(params).toString()),
-  // The two media roots are reported by the listing endpoint itself; /api/dirs is
+  // The media roots are reported by the listing endpoint itself; /api/dirs is
   // the folder-picker tree, not the roots.
-  roots: async () => {
-    const d = await req('/api/list?limit=1');
-    return { fav: d.favoritesDir || d.root || '', out: d.comfyOutputDir || '' };
-  },
+  roots: async () => rootsFrom(await req('/api/list?limit=1')),
   dirs: () => req('/api/dirs'),
   browseDirs: p => req('/api/browse-dirs?path=' + enc(p || '')),
   mkdir: (parent, name) => post('/api/mkdir', { parent, name }),

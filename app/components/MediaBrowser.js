@@ -3,7 +3,7 @@
 // Lifted out of RemixDialog so the form component can raise it wherever it is
 // mounted — the picker belongs to the field, not to the dialog that used to be
 // the only thing rendering fields.
-import { api, fileUrl, thumbUrl } from '../api.js';
+import { api, fileUrl, thumbUrl, rootsFrom } from '../api.js';
 import { store } from '../store.js';
 
 const { reactive, ref, computed, watch, onMounted } = window.Vue;
@@ -25,8 +25,10 @@ export default {
     const clearSel = () => sel.splice(0, sel.length);
     const applySel = () => { if (sel.length) emit('pick', sel.slice()); };
     const state = reactive({ items: [], parent: null, dir: '', loading: false });
-    const roots = reactive({ output: '', favorites: '' });
-    const activeRoot = ref('output');
+    const roots = reactive({ fav: '', out: '', in: '' });
+    const activeRoot = ref('out');
+    // Short labels: the switch sits in a toolbar beside the search box.
+    const rootTabs = [{ key: 'out', label: 'Output' }, { key: 'in', label: 'Input' }, { key: 'fav', label: 'Favorites' }];
     const search = ref('');
     const sortIdx = ref(0);
     const words = reactive({ open: false, list: [], filter: '', loading: false });
@@ -43,19 +45,19 @@ export default {
         const r = await api.list(p);
         const t = props.type;
         state.items = (r.items || []).filter(it => it.isDir || (t === 'image' ? it.isImage : t === 'video' ? it.isVideo : it.isAudio));
-        roots.output = r.comfyOutputDir || roots.output; roots.favorites = r.favoritesDir || roots.favorites;
+        Object.assign(roots, rootsFrom(r, roots));
         state.parent = r.parent; state.dir = r.dir || '';
       } catch (e) {}
       state.loading = false;
     }
-    function switchRoot(which) { activeRoot.value = which; search.value = ''; load(which === 'output' ? roots.output : roots.favorites); }
+    function switchRoot(which) { activeRoot.value = which; search.value = ''; load(roots[which]); }
     onMounted(async () => {
       // The two roots are app-wide, so take the shared copy when it is already
       // known and only pay for the discovery request when it isn't.
       if (!store.roots.out && !store.roots.fav) { try { store.roots = await api.roots(); } catch (e) {} }
-      roots.output = store.roots.out || ''; roots.favorites = store.roots.fav || '';
-      activeRoot.value = roots.output ? 'output' : 'favorites';
-      load(activeRoot.value === 'output' ? roots.output : (roots.favorites || ''));
+      Object.assign(roots, rootsFrom(null, store.roots));
+      activeRoot.value = roots.out ? 'out' : 'fav';
+      load(roots[activeRoot.value] || '');
     });
     function onSearch() { clearTimeout(timer); timer = setTimeout(() => load(search.value.trim() ? null : state.dir), 350); }
     function clickItem(it) {
@@ -71,14 +73,13 @@ export default {
     async function openWords() { words.open = true; if (words.list.length) return; words.loading = true; try { const d = await api.promptWords(); words.list = d.words || []; } catch (e) {} words.loading = false; }
     const filteredWords = computed(() => { const f = words.filter.trim().toLowerCase(); const l = f ? words.list.filter(w => w.t.includes(f)) : words.list; return l.slice().sort((a, b) => b.n - a.n || a.t.localeCompare(b.t)).slice(0, 400); });
     function pickWord(w) { words.open = false; search.value = w.t; load(null); }
-    return { state, roots, activeRoot, switchRoot, search, words, load, onSearch, clickItem, thumb, dirName, sortLabel, cycleSort, openWords, filteredWords, pickWord, sel, isSel, clearSel, applySel };
+    return { state, roots, rootTabs, activeRoot, switchRoot, search, words, load, onSearch, clickItem, thumb, dirName, sortLabel, cycleSort, openWords, filteredWords, pickWord, sel, isSel, clearSel, applySel };
   },
   template: `
     <div class="mb">
       <div class="mb-toolbar">
         <div class="mb-roots">
-          <button :class="{on: activeRoot==='output'}" @click="switchRoot('output')" :disabled="!roots.output">Output</button>
-          <button :class="{on: activeRoot==='favorites'}" @click="switchRoot('favorites')" :disabled="!roots.favorites">Favorites</button>
+          <button v-for="t in rootTabs" :key="t.key" :class="{on: activeRoot===t.key}" @click="switchRoot(t.key)" :disabled="!roots[t.key]">{{ t.label }}</button>
         </div>
         <input class="rmx-inp mb-search" type="search" placeholder="Search names & prompts…" v-model="search" @input="onSearch">
         <button class="rmx-btn2" @click="openWords" title="Browse prompt words"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M20.6 13.4l-7.1 7.1a2 2 0 0 1-2.8 0l-6.2-6.2A2 2 0 0 1 3.9 12.8l.5-7a1.5 1.5 0 0 1 1.4-1.4l7-.5a2 2 0 0 1 1.5.6l6.3 6.3a2 2 0 0 1 0 2.6z"/><circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/></svg></button>

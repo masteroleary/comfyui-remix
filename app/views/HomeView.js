@@ -2,7 +2,7 @@
 // The landing tiles: the media roots plus whichever optional features are turned
 // on in config. Ported from the pre-SPA HomeApp, with two changes: the tiles that
 // now read straight off the store instead of a homeState mirror.
-import { store, showToast } from '../store.js';
+import { store, showToast, ROOT_DEFS } from '../store.js';
 import { api } from '../api.js';
 import { browseTo } from '../router.js';
 
@@ -12,7 +12,7 @@ export default {
   name: 'HomeView',
   setup() {
     const loading = ref(true);
-    const roots = ref({ fav: '', out: '' });
+    const roots = ref({ fav: '', out: '', in: '' });
     const features = ref(null);      // null until settings load; array once known
     const httpsPort = ref(8443);
     const recent = ref([]);
@@ -21,11 +21,12 @@ export default {
 
     const tiles = computed(() => {
       const out = [];
-      out.push({ key: 'favorites', icon: '⭐', label: 'Favorites', sub: 'Everything you kept',
-                 to: browseTo({ dir: roots.value.fav }, null, roots.value) });
-      if (roots.value.out) {
-        out.push({ key: 'output', icon: '🎨', label: 'ComfyUI Output', sub: 'Fresh from the queue',
-                   to: browseTo({ dir: roots.value.out }, null, roots.value) });
+      // Favorites first, then the ComfyUI roots that exist on this install.
+      for (const d of [...ROOT_DEFS].sort((a, b) => (b.key === 'fav') - (a.key === 'fav'))) {
+        const dir = roots.value[d.key];
+        if (!dir && d.key !== 'fav') continue;
+        out.push({ key: 'root-' + d.key, icon: d.icon, label: d.label, sub: d.sub,
+                   to: browseTo({ dir }, null, roots.value) });
       }
       out.push({ key: 'jobs', icon: '⚡', label: 'Jobs', sub: 'Running and completed runs',
                  to: { name: 'jobs' } });

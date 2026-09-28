@@ -7,15 +7,18 @@
 // The URL is the source of truth for what you're looking at — folder, page,
 // search, sort, filter, and the open item. Before the rewrite none of that was in
 // the URL: a refresh dropped you at home and Back left the app entirely.
+import { rootOf } from './store.js';
+
 const { createRouter, createWebHistory } = window.VueRouter;
 
 export const routes = [
   { path: '/', name: 'home', component: () => import('./views/HomeView.js') },
   {
     // /browse/<root>/<nested/folder>. The root key names which media tree —
-    // `fav` (the library) or `out` (ComfyUI output) — and :path(.*)* is a
-    // repeated wildcard so nested folders keep their slashes.
-    path: '/browse/:root(fav|out)?/:path(.*)*',
+    // `fav` (the library), `out` (ComfyUI output) or `in` (ComfyUI input),
+    // see ROOT_DEFS — and :path(.*)* is a repeated wildcard so nested folders
+    // keep their slashes.
+    path: '/browse/:root(fav|out|in)?/:path(.*)*',
     name: 'browse',
     component: () => import('./views/BrowseView.js'),
     props: true,
@@ -23,7 +26,7 @@ export const routes = [
   // Same shape as /browse: root key + relative path. An absolute Windows path
   // here would put the server's layout in the address bar and break every
   // bookmark the day mediaDir moves.
-  { path: '/view/:root(fav|out)/:path(.*)+', name: 'view', component: () => import('./views/ViewerView.js'), props: true },
+  { path: '/view/:root(fav|out|in)/:path(.*)+', name: 'view', component: () => import('./views/ViewerView.js'), props: true },
   { path: '/inspect', name: 'inspect', component: () => import('./views/InspectView.js') },
   // The workflow library. A page rather than the Remix dialog's picker alone,
   // because the library is a property of the install, not of whichever file
@@ -59,19 +62,13 @@ export const router = createRouter({
 // with forward ones. Normalise on the way in, and never let either form reach
 // the address bar.
 const norm = p => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
-const under = (child, parent) => parent
-  && (child.toLowerCase() === parent.toLowerCase() || child.toLowerCase().startsWith(parent.toLowerCase() + '/'));
-
+// rootOf (store.js) does the matching, most specific root first.
 export function splitRoot(abs, roots) {
-  const a = norm(abs), out = norm(roots.out), fav = norm(roots.fav);
-  // Check output first: it can sit inside the library tree, and the more
-  // specific root has to win or its folders would address as library ones.
-  if (under(a, out)) return { key: 'out', rel: a.slice(out.length + 1) };
-  if (under(a, fav)) return { key: 'fav', rel: a.slice(fav.length + 1) };
-  return { key: 'fav', rel: '' };
+  const { key, rel } = rootOf(abs, roots);
+  return { key, rel };
 }
 export function joinRoot(key, rel, roots) {
-  const base = norm(key === 'out' ? roots.out : roots.fav);
+  const base = norm(roots[key] || roots.fav);
   return rel ? base + '/' + rel : base;
 }
 

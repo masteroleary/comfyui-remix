@@ -5,7 +5,7 @@
 // which is what makes Back, refresh and deep links work at all (none of them did
 // before the rewrite).
 import { store, showToast, registerReload, toggleSelected } from '../store.js';
-import { api } from '../api.js';
+import { api, rootsFrom } from '../api.js';
 import { browseQuery, browseTo, viewTo } from '../router.js';
 import MediaTile from '../components/MediaTile.js';
 // The run engine, for the folder-refresh subscription below. AppShell already
@@ -54,9 +54,7 @@ export default {
         store.total = data.total || 0;
         store.pages = data.pages || 1;
         store.parent = data.parent ?? null;
-        if (data.favoritesDir || data.comfyOutputDir) {
-          store.roots = { fav: data.favoritesDir || store.roots.fav, out: data.comfyOutputDir || store.roots.out };
-        }
+        if (data.favoritesDir || data.comfyOutputDir) store.roots = rootsFrom(data, store.roots);
       } catch (e) {
         if (!quiet) {
           store.error = e.message;

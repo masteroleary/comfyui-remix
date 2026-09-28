@@ -23,7 +23,7 @@ import { store, mediaItems, SLIDE_STEPS, setSlideSpeed, setSlideVideoPlay, showT
 // already imports this module eagerly for the progress badge, so the engine is
 // in the graph before the viewer is ever reached.
 import { jobs, outputItems, forgetOutput, onOutputsLanded } from '../components/RemixDialog.js';
-import { api, fileUrl } from '../api.js';
+import { api, fileUrl, rootsFrom } from '../api.js';
 import { browseTo, viewTo, joinRoot } from '../router.js';
 
 const { ref, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } = window.Vue;
@@ -216,9 +216,7 @@ export default {
       store.page = data.page || p;
       store.dir = dir;
       store.parent = data.parent ?? store.parent;
-      if (data.favoritesDir || data.comfyOutputDir) {
-        store.roots = { fav: data.favoritesDir || store.roots.fav, out: data.comfyOutputDir || store.roots.out };
-      }
+      if (data.favoritesDir || data.comfyOutputDir) store.roots = rootsFrom(data, store.roots);
       return data;
     }
 

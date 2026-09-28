@@ -26,16 +26,44 @@ export const TYPES = [
   { t: 'audio', label: '🎵 Audio' },
 ];
 
+// The media roots: the key a URL spells it by (/browse/<key>/…), the field of
+// store.roots holding its absolute path, and the name it goes by on screen.
+// Everything that switches between roots, heads a path with one or turns an
+// absolute path back into a URL reads this, so a root added here is one line.
+export const ROOT_DEFS = [
+  { key: 'out', label: 'ComfyUI Output', icon: '🎨', sub: 'Fresh from the queue' },
+  { key: 'in', label: 'ComfyUI Input', icon: '📥', sub: 'What runs are fed from' },
+  { key: 'fav', label: 'Favorites', icon: '⭐', sub: 'Everything you kept' },
+];
+export const rootLabel = key => (ROOT_DEFS.find(d => d.key === key) || ROOT_DEFS[ROOT_DEFS.length - 1]).label;
+const normRoot = p => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
+// Which root an absolute path sits under, and the path relative to it. The
+// longest matching root wins: ComfyUI's folders can sit inside the library tree,
+// and the more specific root has to win or its folders would address as library
+// ones. Falls back to the library root with no relative path.
+export function rootOf(abs, roots) {
+  const a = normRoot(abs), lc = a.toLowerCase();
+  let best = null;
+  for (const d of ROOT_DEFS) {
+    const base = normRoot(roots && roots[d.key]);
+    if (!base) continue;
+    const b = base.toLowerCase();
+    if ((lc === b || lc.startsWith(b + '/')) && (!best || base.length > best.base.length)) best = { key: d.key, base };
+  }
+  if (!best) return { key: 'fav', base: normRoot(roots && roots.fav), rel: '' };
+  return { key: best.key, base: best.base, rel: a.length > best.base.length ? a.slice(best.base.length + 1) : '' };
+}
+
 export const store = reactive({
   // ── Browsing ──
   // dir/page/search/sort/type are mirrored into the URL by the router, so these
   // are set from the route rather than written directly by the grid. See router.js.
   dir: null, parent: null,
-  // The two media roots, absolute. URLs carry a root key plus a relative path
-  // (/browse/out/2026-08) rather than an absolute one: an absolute Windows path
-  // in the address bar is unreadable, leaks the server's layout, and every
+  // The media roots (ROOT_DEFS), absolute. URLs carry a root key plus a relative
+  // path (/browse/out/2026-08) rather than an absolute one: an absolute Windows
+  // path in the address bar is unreadable, leaks the server's layout, and every
   // bookmark breaks the day mediaDir moves.
-  roots: { fav: '', out: '' },
+  roots: { fav: '', out: '', in: '' },
   page: 1, limit: 48, total: 0, pages: 0,
   search: '', sort: 'date', asc: false, type: 'all',
   flatten: false,           // recursive grouped view of the current dir
@@ -126,14 +154,10 @@ export const onHome = computed(() => store.dir == null && !store.search);
 // Splitting the absolute dir instead would lead with D: / ComfyRemix / Media —
 // unclickable, and it puts the server's layout on screen.
 export const crumbs = computed(() => {
-  const norm = p => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
-  const dir = norm(store.dir);
+  const dir = normRoot(store.dir);
   if (!dir) return [];
-  const out = norm(store.roots.out), fav = norm(store.roots.fav);
-  const inOut = out && dir.toLowerCase().startsWith(out.toLowerCase());
-  const base = inOut ? out : fav;
-  const head = { label: inOut ? 'ComfyUI Output' : 'Favorites', dir: base, last: dir.length <= base.length };
-  const rel = dir.length > base.length ? dir.slice(base.length + 1) : '';
+  const { key, base, rel } = rootOf(dir, store.roots);
+  const head = { label: rootLabel(key), dir: base, last: !rel };
   const parts = rel ? rel.split('/').filter(Boolean) : [];
   return [head, ...parts.map((label, i) => ({
     label,
