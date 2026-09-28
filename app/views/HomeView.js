@@ -21,13 +21,15 @@ export default {
 
     const tiles = computed(() => {
       const out = [];
-      // Favorites first, then the ComfyUI roots that exist on this install.
-      for (const d of [...ROOT_DEFS].sort((a, b) => (b.key === 'fav') - (a.key === 'fav'))) {
-        const dir = roots.value[d.key];
-        if (!dir && d.key !== 'fav') continue;
-        out.push({ key: 'root-' + d.key, icon: d.icon, label: d.label, sub: d.sub,
-                   to: browseTo({ dir }, null, roots.value) });
-      }
+      // One way into the media, landing on Favorites. It was a tile per root —
+      // Favorites, ComfyUI Output, ComfyUI Input — but the browse page's own
+      // switch already moves between them, so three tiles were three doors to
+      // one room. The sub-line names the roots this install actually has.
+      const have = ROOT_DEFS.filter(d => d.key === 'fav' || roots.value[d.key])
+        .sort((a, b) => (b.key === 'fav') - (a.key === 'fav'));
+      out.push({ key: 'media', icon: '🖼', label: 'Media',
+                 sub: have.map(d => d.key === 'fav' ? 'Favorites' : d.label.replace(/^ComfyUI /, '')).join(' · '),
+                 to: browseTo({ dir: roots.value.fav }, null, roots.value) });
       out.push({ key: 'jobs', icon: '⚡', label: 'Jobs', sub: 'Running and completed runs',
                  to: { name: 'jobs' } });
       out.push({ key: 'workflows', icon: '🧩', label: 'Workflows', sub: 'The library Remix runs from',
