@@ -143,6 +143,10 @@ export default {
     // Not "active": activeRows and activeReplacements both already mean
     // "switched on and able to fire", which is a different question entirely.
     visible: { type: Boolean, default: true },
+    // How many jobs each ticked prompt becomes: the picked models times the
+    // picked files, which the host knows and this panel does not. Without it
+    // the summary said "12 jobs total" beside a Run button about to queue 24.
+    multiplier: { type: Number, default: 1 },
   },
   setup(props) {
     // The library is only needed once a [keyword] rule exists, but it is two
@@ -1028,7 +1032,7 @@ export default {
            keywords themselves on the hover. -->
       <!-- The ⓘ swallows its own click: it sits inside the summary, so without
            that, reading what the panel is would shut it. -->
-      <summary>Prompt Replacements<span class="rmx-repl-i" :title="HELP" @click.prevent.stop>ⓘ</span><span class="rmx-repl-on" v-if="activeRows"> — {{ activeRows }} active</span><span class="rmx-mut" v-else-if="rows.length && !idleRows.length"> — {{ rows.length }} off</span><span class="rmx-repl-idle" v-if="idleRows.length" :title="idleTitle">{{ activeRows ? ', ' : ' — ' }}{{ idleRows.length }} ignored</span><span class="rmx-repl-jobs" v-if="variations.length > 1">, {{ keptCount }} job{{ keptCount === 1 ? '' : 's' }} total</span></summary>
+      <summary>Prompt Replacements<span class="rmx-repl-i" :title="HELP" @click.prevent.stop>ⓘ</span><span class="rmx-repl-on" v-if="activeRows"> — {{ activeRows }} active</span><span class="rmx-mut" v-else-if="rows.length && !idleRows.length"> — {{ rows.length }} off</span><span class="rmx-repl-idle" v-if="idleRows.length" :title="idleTitle">{{ activeRows ? ', ' : ' — ' }}{{ idleRows.length }} ignored</span><span class="rmx-repl-jobs" v-if="variations.length > 1 && multiplier > 1" :title="'Each prompt runs once per picked model and file — ×' + multiplier">, {{ keptCount }} prompt{{ keptCount === 1 ? '' : 's' }} → {{ keptCount * multiplier }} jobs total</span><span class="rmx-repl-jobs" v-else-if="variations.length > 1">, {{ keptCount }} job{{ keptCount === 1 ? '' : 's' }} total</span></summary>
       <div class="rmx-repl-body" v-if="panelOpen">
         <!-- Two columns wherever there is room: the rules on the left, what they
              produce on the right, so an edit and its effect are beside each
@@ -1135,7 +1139,7 @@ export default {
               <button type="button" class="rmx-repl-del" :title="row.keyword ? 'Delete this keyword and every answer to it' : 'Delete rule'" @click="delRow(row)">✕</button>
             </div>
             <div v-if="variations.length > 1" class="rmx-mut" style="font-size:12px;margin-top:8px">
-              A keyword with several answers is a variation for each — a run queues one job per ticked combination, <b>{{ keptCount }}</b> of <b>{{ variations.length }}</b>.
+              A keyword with several answers is a variation for each — a run queues one job per ticked combination, <b>{{ keptCount }}</b> of <b>{{ variations.length }}</b><template v-if="multiplier > 1">, once for every picked model and file: <b>{{ keptCount * multiplier }}</b> jobs</template>.
             </div>
             <!-- The keywords the prompt addresses by index. Worth its own block:
                  four ticked answers and one job is the exact opposite of the

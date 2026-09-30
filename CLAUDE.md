@@ -138,6 +138,25 @@ usually the same bug: something the host provided instead of the component.
   component exists to prevent. It is re-armed per form, keyed on the fields
   array itself, so a workflow switch turns it back on but toggling a field
   inside the same form leaves it where it was put.
+  It also owns **the model pills**. A model field is `ComboSearch` in `multi`
+  mode: a search box whose results are pills to its right, and every job a run
+  queues is queued once per picked model. The picks ride on `field.values` with
+  `field.value` kept on the first — the multi-file image pick's shape — so every
+  path that reads one value still reads one. **The first pick replaces** the
+  model the form arrived with (drawn tinted, `.def`: it runs, but nobody chose
+  it), and every pick after that adds, because switching model was one click
+  and must not quietly become a run on both. Clicking the tinted one keeps it,
+  which is how you get it alongside others; unpicking the last pick returns to
+  that state rather than refusing the click. A value set from outside that is
+  not among the picks (a prefill, a shortcut) drops them — the value is what
+  the run would send. Three things ride along: a pill (or, in single mode, the
+  button) whose value ComfyUI does not list is **amber**, since the run fails at
+  that loader; picks from **different architectures** get a line under the
+  pills — the LoRAs, VAE and text encoder were set up for one of them — with
+  Illustrious and Pony counted as SDXL (`base` on `LORA_FAMILIES`), since an
+  SDXL LoRA loads on both; and while the box is empty the **recently picked**
+  models are offered as dashed pills, from one localStorage list filtered to
+  what this field's options contain.
 - **`components/MediaBrowser.js`** — the gallery a media field opens.
 - **`components/MediaTile.js`** — one card: square thumbnail flush to the tile,
   info bar under it. The thumbnail opens the viewer, the bar raises Remix. Used
@@ -171,6 +190,31 @@ loop checks it before each submit and sweeps once more when it stops), reads
 *verifies* — a row that says "Cancelled" over a queue that is still working is
 worse than an error. Deleting a running job cancels it first, for the same
 reason: once the record is gone, nothing holds the prompt ids that could.
+
+**Several models fan out model by model, and the queue keeps that order.**
+`modelCombos(fields)` is the one outer loop both hosts run — model, then file,
+then prompt variation — with two multi-picked model fields (a WAN high/low
+pair) multiplying into every pairing, first field outermost; `fanoutNote` is
+the count beside both Run buttons. The order only matters if ComfyUI sees it,
+and it used to not: every `launchJob` ran concurrently, so prompts landed in
+whichever order the uploads finished and two jobs' runs interleaved run by run.
+Now each launch takes a **turn** synchronously (`queueTurn`): preparing still
+overlaps, but a job submits only once every job launched before it has finished
+submitting, so ComfyUI loads each checkpoint once instead of swapping between
+every render. A turn is handed on only after the one before it — a job that
+fails or is cancelled while waiting must not let the next overtake a job still
+queueing ahead of it. Which is why **every request the engine makes has a
+time limit** (`tfetch`, 2 minutes; 30 s for the queue/history reads the
+reconciler holds its lock across): one request that never answered used to
+cost one job, and behind a turn it would hold every later job forever.
+
+A multi-model run also **shares its seeds across the models**: `seedPlan` draws
+one list per slot (one file, one prompt variation), every model filling that
+slot gets it, and `launchJob` draws each seed input from that run's number in
+graph order — so two samplers still get two seeds, the same two for the next
+model. Otherwise the comparison was half model and half noise. The replacement
+panel's "N jobs total" takes the models × files `multiplier` from its host, so
+it agrees with the line beside Run.
 
 **Match Input Image is applied in `launchJob`, not in the caller.** A batch is N
 jobs each holding its own file, so measuring once up front would size every run

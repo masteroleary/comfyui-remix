@@ -29,7 +29,7 @@ import MediaTile from '../components/MediaTile.js';
 // The run engine. It lives in RemixDialog for historical reasons (see the note
 // at the top of that file); what matters here is that there is exactly one.
 import { launchJob, cancelJob, jobs, link, presetFromEmbedded, outputItems, forgetOutput,
-  promptAlternatives } from '../components/RemixDialog.js';
+  promptAlternatives, modelCombos, batchFieldOf, fanoutNote, seedPlan } from '../components/RemixDialog.js';
 import ReplacementRules from '../components/ReplacementRules.js';
 import WorkflowFields, { replaceableText } from '../components/WorkflowFields.js';
 import { keptVariations, varyingPickKeys, pickKeyOf, replacementText, applyReplacements } from '../replacements.js';
@@ -630,6 +630,20 @@ export default {
     // Every text field a run from this page will rewrite — what the rules panel
     // counts its tabs against, so they are the jobs ▶ Run actually queues.
     const replScope = computed(() => replaceableText((fieldConfig.value && fieldConfig.value.fields) || []));
+    // Beside the Run button once several models or files multiply the run —
+    // the line the dialog shows, off the same functions.
+    const runShape = computed(() => {
+      const fields = (fieldConfig.value && fieldConfig.value.fields) || [];
+      const bf = batchFieldOf(fields);
+      return { models: modelCombos(fields).length, files: bf ? bf.values.length : 1 };
+    });
+    const runFanout = computed(() => {
+      const { models, files } = runShape.value;
+      if (models < 2 && files < 2) return '';
+      return fanoutNote(models, files, keptVariations(replScope.value).length, parseInt(runCount.value, 10) || 1);
+    });
+    // Jobs per ticked prompt, for the replacement panel's own count.
+    const runMultiplier = computed(() => runShape.value.models * runShape.value.files);
     // The prompt the rules will rewrite, for the editor to preview.
     const promptFieldText = computed(() => {
       const f = ((fieldConfig.value && fieldConfig.value.fields) || []).find(x => x.kind === 'prompt' && x.enabled && !x.variant);
@@ -746,9 +760,14 @@ export default {
       // measures the file this page is open on when that comes back empty,
       // which is why this does not need to filter.
       const cfgNow = fieldConfig.value;
-      const matchSize = (cfgNow.matchSize && cfgNow.matchInput)
-        ? { width: cfgNow.matchSize.width, height: cfgNow.matchSize.height, from: (mediaFields.find(m => !(fields.find(f => f.id === m.id) || {}).meta?.activates) || {}).value || '' }
-        : null;
+      const matchSizeFor = from => ((cfgNow.matchSize && cfgNow.matchInput)
+        ? { width: cfgNow.matchSize.width, height: cfgNow.matchSize.height, from: from || '' }
+        : null);
+      // An optional image (a second reference) is never the frame: the size
+      // comes off the image being edited, so it is skipped when picking `from`.
+      const optionalImage = id => !!(fields.find(f => f.id === id) || {}).meta?.activates;
+      const sizeFrom = mf => (mf.find(m => !optionalImage(m.id)) || {}).value;
+      const matchSize = matchSizeFor(sizeFrom(mediaFields));
 
       // Several enabled rules for one keyword are variations of each other, so
       // a run queues one job per combination — the same fan-out the dialog does,
@@ -785,17 +804,49 @@ export default {
         nodeEdits: nodeEdits.value,
         runs: parseInt(runCount.value, 10) || 1,
       };
+      // A multi-file pick runs one job per file, as it does in the dialog. The
+      // picker has always let you choose several here — it is the shared form's
+      // — and the field said "N files · one job each", while this page queued
+      // only the first. The source stays the file this page is open on (or none,
+      // on a file-less visit); displaySource re-points only the job's row at the
+      // file that job actually feeds in.
+      const bf = batchFieldOf(fields);
+      const fileParams = file => {
+        if (file == null) return { fieldValues: {} };
+        const mf = mediaFields.filter(m => m.id !== bf.id).concat([{ id: bf.id, value: file }]);
+        return {
+          fieldValues: { [bf.id]: file }, mediaFields: mf,
+          matchSize: matchSizeFor(optionalImage(bf.id) ? sizeFrom(mf) : file),
+          displaySource: { path: file, name: String(file).split(/[\\/]/).pop() },
+        };
+      };
       let newJobId = null;
-      variations.forEach((v, n) => {
-        const id = launchJob(Object.assign({}, jobParams, {
-          replacementRules: v,
-          variationLabel: labelFor(v, n),
-          // The record shows the prompt this job actually sends, so it is built
-          // from that job's variation rather than once from the whole list.
-          promptText: pf ? applyReplacements(String(pf.value == null ? '' : pf.value), v) : '',
-        }));
-        if (!newJobId) newJobId = id;
-      });
+      // Several picked models run every job once per model, model by model, and
+      // inside each model every file and then every variation — the loops the
+      // dialog runs, from the same functions, so what the shared form shows
+      // here queues what it says.
+      const combos = modelCombos(fields);
+      // Several models share their seeds slot by slot — a file and a variation —
+      // so what differs between them is the model (see seedPlan).
+      const seedsFor = seedPlan(jobParams.runs, combos.length > 1 && !jobParams.seedPinned);
+      for (const mc of combos) for (const file of (bf ? bf.values : [null])) {
+        const fp = fileParams(file);
+        variations.forEach((v, n) => {
+          const id = launchJob(Object.assign({}, jobParams, fp, {
+            // Its own copy, with its file and model laid over it: the engine
+            // writes the uploaded names into whatever object it is handed.
+            fieldValues: Object.assign({}, jobParams.fieldValues, fp.fieldValues, mc.values),
+            modelLabel: mc.label,
+            seeds: seedsFor((file || '') + '\n' + n),
+            replacementRules: v,
+            variationLabel: labelFor(v, n),
+            // The record shows the prompt this job actually sends, so it is built
+            // from that job's variation rather than once from the whole list.
+            promptText: pf ? applyReplacements(String(pf.value == null ? '' : pf.value), v) : '',
+          }));
+          if (!newJobId) newJobId = id;
+        });
+      }
       jobId.value = typeof newJobId === 'string' ? newJobId : ((jobs.list[0] && jobs.list[0].id) || '');
       outputSelected.value = new Set();
       outputFaved.value = new Set();
@@ -1005,7 +1056,7 @@ export default {
       // run controls
       showRun, wfOptions, wfName, hasInherit, onWorkflowChange,
       runCount, persistRunCount,
-      job, running, runProgress, onRun, onCancel,
+      job, running, runProgress, runFanout, runMultiplier, onRun, onCancel,
 
       selectedPreset,
       // detected fields
@@ -1180,6 +1231,7 @@ export default {
 
         <button class="btn btn-run" v-show="!running" @click="onRun">▶ Run</button>
         <button class="btn btn-cancel" v-show="running" @click="onCancel">■ Cancel</button>
+        <span v-if="runFanout" class="run-progress" title="Queued model by model, so each model loads once">{{ runFanout }}</span>
         <span class="run-progress">{{ runProgress }}</span>
       </div>
 
@@ -1221,7 +1273,7 @@ export default {
            same place as the dialog’s Run tab. Folded shut, its summary is the
            line that says ▶ Run is about to queue twelve of something; open, its
            tabs are where twelve becomes the five that were wanted. -->
-      <replacement-rules :prompt="promptFieldText" :scope="replScope" :visible="tab === 'run'"></replacement-rules>
+      <replacement-rules :prompt="promptFieldText" :scope="replScope" :visible="tab === 'run'" :multiplier="runMultiplier"></replacement-rules>
     </div>
   </div>
 

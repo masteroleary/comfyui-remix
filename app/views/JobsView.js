@@ -168,6 +168,7 @@ export default {
             <div class="rmx-job-title">
               <span class="rmx-dot" :class="dotOf(j)"></span>
               {{ j.workflow }}
+              <span v-if="j.model" class="rmx-mut" :title="'Model · ' + j.model">· {{ j.model }}</span>
               <span class="rmx-mut">· {{ timeAgo(j.startTime) }}</span>
               <span v-if="j.runs > 1" class="rmx-mut">· {{ j.runsCompleted || 0 }}/{{ j.runs }} runs</span>
             </div>

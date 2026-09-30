@@ -39,18 +39,31 @@ const { reactive, ref, computed, watch, inject, provide } = window.Vue;
 //
 // Order matters only for the auto-pick: the first family whose model pattern
 // matches wins.
+//
+// `base` is the architecture underneath, for the one question that is about
+// architecture rather than naming: whether two picked models can share a run's
+// LoRAs. Illustrious and Pony are SDXL fine-tunes, and an SDXL LoRA loads on
+// either, so a pick of both is not worth a warning.
 export const LORA_FAMILIES = [
   { id: 'wan', label: 'WAN', re: /wan/i, model: /wan/i },
   { id: 'krea', label: 'KREA', re: /krea/i, model: /krea/i },
   { id: 'ltx', label: 'LTX', re: /ltx/i, model: /ltx/i },
-  { id: 'illustrious', label: 'Illustrious', re: /illustrious|\bwai/i, model: /illustrious|\bwai/i },
-  { id: 'pony', label: 'Pony', re: /pony/i, model: /pony/i },
+  { id: 'illustrious', label: 'Illustrious', re: /illustrious|\bwai/i, model: /illustrious|\bwai/i, base: 'sdxl' },
+  { id: 'pony', label: 'Pony', re: /pony/i, model: /pony/i, base: 'sdxl' },
   { id: 'sdxl', label: 'SDXL', re: /sdxl/i, model: /sdxl/i },
   { id: 'flux', label: 'Flux', re: /flux/i, model: /flux/i },
   { id: 'chroma', label: 'Chroma', re: /chroma/i, model: /chroma/i },
 ];
 const familyById = id => LORA_FAMILIES.find(f => f.id === id) || null;
-const WIDE = new Set(['prompt', 'negative_prompt', 'lora_list', 'image_input', 'video_input', 'audio_input']);
+// The architecture a model file belongs to, as the family it would be filed
+// under — or null when the name gives nothing away, which is not a mismatch.
+const modelBase = v => {
+  const f = LORA_FAMILIES.find(fam => fam.model.test(String(v == null ? '' : v)));
+  return f ? familyById(f.base || f.id) : null;
+};
+// A model field is wide for its pills: they sit to the right of the search box
+// (see ComboSearch's multi mode), and in a half-row they would only ever wrap.
+const WIDE = new Set(['prompt', 'negative_prompt', 'lora_list', 'image_input', 'video_input', 'audio_input', 'model']);
 const loraLast = (a, b) => (/^lora/.test(a.kind) ? 1 : 0) - (/^lora/.test(b.kind) ? 1 : 0);
 export const shortLora = s => String(s == null ? '' : s).split(/[\\/]/).pop().replace(/\.safetensors$/i, '');
 // A High/Low pair is one lora as far as suggestions go, so they collapse to a
@@ -245,7 +258,20 @@ const FieldControl = {
     // (sampler, scheduler) stay a plain dropdown.
     const comboOpts = computed(() => (props.field.control && props.field.control.options) || [props.field.value]);
     const searchable = computed(() => ['model', 'vae'].includes(props.field.kind) || comboOpts.value.length > 15);
-    return { t: computed(() => ctype(props.field)), comboOpts, searchable, locked, shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
+    // Picked models from more than one architecture. Everything else in the
+    // graph — the LoRAs switched on, and on a UNET workflow its VAE and text
+    // encoder — was set up for one of them, and on the others it errors or
+    // does nothing. Said, not blocked: comparing across families is a fine thing
+    // to want, and only a name nobody can read (no family) stays quiet.
+    const modelWarn = computed(() => {
+      const f = props.field;
+      if (f.kind !== 'model' || !Array.isArray(f.values) || f.values.length < 2) return '';
+      const bases = [...new Set(f.values.map(modelBase).filter(Boolean))];
+      if (bases.length < 2) return '';
+      const names = bases.map(b => b.label);
+      return 'These are ' + names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] + ' models — LoRAs, VAEs and text encoders made for one family fail or do nothing on another.';
+    });
+    return { t: computed(() => ctype(props.field)), comboOpts, searchable, modelWarn, locked, shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
   },
   template: `
     <textarea autocomplete="off" v-if="t==='multiline'" v-autosize class="rmx-inp rmx-ta" style="width:100%" rows="2" v-model="field.value"></textarea>
@@ -261,6 +287,7 @@ const FieldControl = {
     <input autocomplete="off" v-else-if="t==='int' || t==='float'" type="number" class="rmx-inp" style="width:120px" :step="t==='float' ? '0.01' : '1'" v-model="field.value"
            :disabled="locked" :title="locked ? 'Coming from the input image — untick Match Input Image to set it here' : null">
     <ComboSearch v-else-if="t==='combo' && searchable" v-model="field.value" :options="comboOpts"
+                 :multi="field.kind==='model'" v-model:picks="field.values" unit="model" :warn="modelWarn"
                  :placeholder="field.kind==='model' ? 'Search models and folders…' : 'Search…'" />
     <select v-else-if="t==='combo'" class="rmx-inp" v-model="field.value"><option v-for="o in comboOpts" :key="o" :value="o">{{ o }}</option></select>
     <div v-else-if="t==='lora_rows'" class="rmx-loras">

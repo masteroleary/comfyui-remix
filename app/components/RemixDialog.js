@@ -22,6 +22,7 @@ import MediaToolsMenu from './MediaToolsMenu.js';
 import MediaTile from './MediaTile.js';
 import WorkflowFields, { ctype, shortLora, canonLora, loraWords, replaceableText } from './WorkflowFields.js';
 import ReplacementRules from './ReplacementRules.js';
+import { shortModel } from './ComboSearch.js';
 import { activeReplacements, applyReplacements, applyReplacementsToNodes, loadReplacements,
   varyingPickKeys, pickKeyOf, keptVariations, replacementText } from '../replacements.js';
 import { viewTo } from '../router.js';
@@ -34,12 +35,31 @@ const enc = encodeURIComponent;
 // api.js's req(): several of these answer with a body that carries `error` as
 // data the caller inspects (a rejected prompt, a taken workflow name), and req()
 // turns that into a throw.
-const jget = url => fetch(url, { credentials: 'same-origin' }).then(r => r.json());
-const jpost = (url, body) => fetch(url, {
-  method: 'POST', credentials: 'same-origin',
+//
+// Every request here gives up in the end. None used to, and while each job ran
+// on its own that cost one job; since jobs take turns at the queue (see Queue
+// order), one request that never answers would hold every job launched after
+// it at "Waiting for earlier jobs to queue…" for good. The bound is generous —
+// it exists to end a hang, not to hurry a slow answer: a field build can wait
+// half a minute on ComfyUI's /object_info alone. The timer runs until the body
+// has been read, since a stalled body hangs exactly as well as a stalled reply.
+const REQ_MS = 120000;
+async function tfetch(url, opts, ms, read) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, Object.assign({ credentials: 'same-origin' }, opts, { signal: ctl.signal }));
+    return read ? await read(r) : r;
+  } catch (e) {
+    throw ctl.signal.aborted ? new Error('no answer after ' + Math.round(ms / 1000) + 's') : e;
+  } finally { clearTimeout(t); }
+}
+const jget = (url, ms) => tfetch(url, {}, ms || REQ_MS, r => r.json());
+const jpost = (url, body, ms) => tfetch(url, {
+  method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body || {}),
-}).then(r => r.json());
+}, ms || REQ_MS, r => r.json());
 
 export const isVideoName = p => /\.(mp4|webm|mkv|mov|m4v)$/i.test(p || '');
 export const isAudioName = p => /\.(mp3|m4a|aac|flac|wav|ogg)$/i.test(p || '');
@@ -220,13 +240,13 @@ async function contentName(blob, ext) {
 async function uploadBlob(blob, ext) {
   const uploadName = await contentName(blob, String(ext || 'png').toLowerCase());
   const fd = new FormData(); fd.append('image', blob, uploadName); fd.append('overwrite', 'true');
-  const r = await fetch('/api/comfy/upload/image', { method: 'POST', credentials: 'same-origin', body: fd });
-  if (!r.ok) return null;
-  const j = await r.json(); return j.name || uploadName;
+  const j = await tfetch('/api/comfy/upload/image', { method: 'POST', body: fd }, REQ_MS, r => (r.ok ? r.json() : null));
+  return j ? (j.name || uploadName) : null;
 }
 async function uploadImagePath(p) {
-  const r = await fetch(fileUrl(p), { credentials: 'same-origin' }); if (!r.ok) return null;
-  const blob = await r.blob(); const name = p.split(/[\\/]/).pop();
+  const blob = await tfetch(fileUrl(p), {}, REQ_MS, r => (r.ok ? r.blob() : null));
+  if (!blob) return null;
+  const name = p.split(/[\\/]/).pop();
   return uploadBlob(blob, name.includes('.') ? name.split('.').pop() : 'png');
 }
 
@@ -364,7 +384,7 @@ const SETTLE_GRACE = 90000;           // a fresh prompt_id can lag /queue briefl
 async function histLookup(pid) {
   if (histCache.has(pid)) return histCache.get(pid);
   let entry = null;
-  try { const r = await fetch('/api/comfy/api/history/' + pid, { credentials: 'same-origin' }); if (!r.ok) return undefined; const d = await r.json(); entry = d && d[pid]; }
+  try { const d = await tfetch('/api/comfy/api/history/' + pid, {}, 30000, r => (r.ok ? r.json() : undefined)); if (d === undefined) return undefined; entry = d && d[pid]; }
   catch (e) { return undefined; }                                  // undefined = could not tell
   const st = entry && entry.status;
   if (!st) return null;                                            // null = ComfyUI never heard of it
@@ -379,7 +399,9 @@ async function histLookup(pid) {
 // on a timer and by cancel at the moment it matters, and the two must not be
 // able to disagree about how to ask.
 async function queueNow() {
-  try { const r = await fetch('/api/comfy/api/queue', { credentials: 'same-origin' }); if (!r.ok) return null; return await r.json(); }
+  // Bounded too: reconcile holds `reconciling` across this, so a queue read that
+  // never answered would stop every job's progress from ever updating again.
+  try { return await tfetch('/api/comfy/api/queue', {}, 30000, r => (r.ok ? r.json() : null)); }
   catch (e) { return null; }
 }
 // How many of this job's prompts ComfyUI still holds — running or pending.
@@ -404,7 +426,7 @@ async function sweepQueue(job) {
   const pending = (q.queue_pending || []).map(e => e[1]).filter(pid => mine.has(pid));
   const running = (q.queue_running || []).map(e => e[1]).filter(pid => mine.has(pid));
   if (pending.length) { try { await jpost('/api/comfy/api/queue', { delete: pending }); } catch (e) {} }
-  if (running.length) { try { await fetch('/api/comfy/api/interrupt', { method: 'POST', credentials: 'same-origin' }); } catch (e) {} }
+  if (running.length) { try { await tfetch('/api/comfy/api/interrupt', { method: 'POST' }, 30000); } catch (e) {} }
   return pending.length + running.length;
 }
 let reconciling = false, reconcileSoon = null;
@@ -567,11 +589,118 @@ async function collectOutputs(job, names) {
   }
   persist(job);
 }
+// ── Model fan-out ──────────────────────────────────────────────────────────
+// Several models picked in a model field (ComboSearch's multi mode) run every
+// job once per model. Both hosts ask this for the list and use it as their
+// outermost loop, so the order they queue in is decided in one place: model by
+// model, and inside each model the files and the prompt variations exactly as
+// before. Grouping by model is the point of the order — ComfyUI then loads each
+// checkpoint once — and Queue order below is what carries it to ComfyUI intact.
+//
+// Two model fields with several picks each (a WAN high/low pair) multiply into
+// every pairing, first field outermost. Pairing them index by index would be a
+// guess about which high goes with which low; the count beside the Run button
+// states the total before anything is queued.
+//
+// Always at least one entry — no override, no label — so a caller loops over
+// it unconditionally.
+export function modelCombos(fields) {
+  let out = [{ values: {}, label: '' }];
+  for (const f of fields || []) {
+    if (!f || !f.enabled || f.kind !== 'model' || !Array.isArray(f.values) || f.values.length < 2) continue;
+    const next = [];
+    for (const c of out) for (const m of f.values) {
+      next.push({ values: Object.assign({}, c.values, { [f.id]: m }),
+        label: (c.label ? c.label + ' · ' : '') + shortModel(m) });
+    }
+    out = next;
+  }
+  return out;
+}
+// ── Same seeds across models ──
+// A seed that is not pinned is drawn fresh for every run, so two models
+// compared side by side also started from two different noises, and half of
+// what looked like the model was the seed. So a run over several models draws
+// its seeds once per slot — one file, one prompt variation — and every model
+// that fills that slot gets the same list, one seed per run. Across files and
+// across prompts they still differ: those are different pictures anyway.
+//
+// seedPlan(runs, share) hands back a lookup keyed however the caller names a
+// slot; with `share` off it answers null and the engine draws as it always has.
+export function seedPlan(runs, share) {
+  const memo = new Map();
+  return key => {
+    if (!share) return null;
+    if (!memo.has(key)) memo.set(key, Array.from({ length: Math.max(1, runs) }, () => Math.floor(Math.random() * 2147483647)));
+    return memo.get(key);
+  };
+}
+// mulberry32: small, fast, and deterministic from one 32-bit number, which is
+// all a run needs to hand the same seeds to each of a graph's seed inputs twice.
+function seededRandom(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// The image field holding a multi-file pick, if any: the loop inside the model
+// one, a job per file. Only one field can drive a batch — fanning out over two
+// of them would multiply into a job matrix nobody asked for, so the first one
+// wins and the others keep their single value. Exported for the same reason
+// modelCombos is: the inspect page mounts the same picker, and for a long time
+// ran only the first of the files it let you pick.
+export function batchFieldOf(fields) {
+  return (fields || []).find(f => f && f.enabled && f.kind === 'image_input' && Array.isArray(f.values) && f.values.length > 1) || null;
+}
+// The line beside the Run button once a run is more than one job per prompt:
+// what multiplies it, and what that comes to. Empty when nothing does — the
+// prompt count alone is already on the replacement panel's summary.
+export function fanoutNote(models, files, variations, runs) {
+  if (models < 2 && files < 2) return '';
+  const parts = [];
+  if (models > 1) parts.push(models + ' models');
+  if (files > 1) parts.push(files + ' files');
+  if (variations > 1) parts.push(variations + ' prompts');
+  const n = models * files * variations;
+  return parts.join(' × ') + ' → ' + n + ' jobs, ' + (n * runs) + ' runs total';
+}
+
+// ── Queue order ────────────────────────────────────────────────────────────
+// Jobs reach ComfyUI's queue in the order they were launched, and each job's
+// runs all go in before the next job's first. Preparing a job — the uploads,
+// the measuring, the prompt build — still happens alongside the others; only
+// the submitting takes turns.
+//
+// It did not used to. Every job ran its whole life concurrently, so the order
+// its prompts landed in was whichever upload finished first, and two jobs with
+// several runs each interleaved them run by run. Nobody could see that while
+// every job loaded the same checkpoint. A multi-model run is laid out model by
+// model precisely so that ComfyUI loads each checkpoint once and renders
+// everything that wants it before moving on; interleaved, it swaps checkpoints
+// between every render, which on a big model is most of the run.
+//
+// A turn is taken synchronously at launch, so the order is the call order and
+// not a race. It is handed on only once the turn before it has been handed on
+// too — a job that fails or is cancelled while it waits must not let the next
+// one overtake a job still queueing ahead of it.
+let queueTurn = Promise.resolve();
+
 // Launch a job into the store and drive it to completion (async, non-blocking).
 export function launchJob(p) {
   const id = 'job-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  const myTurn = queueTurn;
+  let endTurn;
+  queueTurn = new Promise(r => { endTurn = r; });
   const job = reactive({
     id, workflow: p.workflowLabel, workflowFile: p.workflowFile,
+    // Which model this job loads, when the run was fanned out over several.
+    // Persisted for the same reason `variation` is.
+    model: p.modelLabel || null,
     // Which of the prompt variations this job is, when there is more than one.
     // Persisted: a row that says nothing about it is indistinguishable from its
     // siblings in the Jobs list, which is where they all land.
@@ -594,6 +723,7 @@ export function launchJob(p) {
   jobs.list.unshift(job); persist(job);
   (async () => {
     const log = (m, cls) => { job._log.push({ m, cls: cls || '' }); if (job._log.length > 200) job._log.shift(); };
+    if (p.modelLabel) log('Model · ' + p.modelLabel + (p.seeds && !p.seedPinned ? ' · same seeds as the other models in this run' : ''));
     let uploadedName = null;
     try {
       if (p.source.type === 'image') { job._node = 'Uploading image…'; uploadedName = await uploadImagePath(p.source.path); }
@@ -684,6 +814,15 @@ export function launchJob(p) {
     // the old per-run await loop did.
     const runs = Math.max(1, p.runs || 1);
     job.runs = runs;
+    // Wait for the jobs launched before this one to finish queueing (see Queue
+    // order above). Already resolved is the usual case, and then this costs a
+    // microtask — the label is never painted.
+    if (!job._cancelled) job._node = 'Waiting for earlier jobs to queue…';
+    await myTurn;
+    // Cancelled while it waited: nothing of it ever reached ComfyUI, so there is
+    // nothing to sweep. The label is set again because the preparing above may
+    // have painted over the one cancelJob wrote.
+    if (job._cancelled) { job._submitting = false; job._node = 'Cancelled'; log('Cancelled before anything was queued', 'warn'); persist(job); return; }
     job._node = 'Queueing…';
     for (let i = 0; i < runs; i++) {
       // Cancel can land in the middle of this. Queueing the runs up front is what
@@ -691,7 +830,12 @@ export function launchJob(p) {
       // two writers to the same queue: cancel swept what was there, and the loop
       // kept adding to it, which is how a cancelled job carried on rendering.
       if (job._cancelled) { log('Cancelled — stopped after queueing ' + i + ' of ' + runs + ' run(s)', 'warn'); break; }
-      if (!p.seedPinned) for (const n of Object.values(prompt)) { if (n.inputs) for (const k of Object.keys(n.inputs)) { if (k.includes('seed') && typeof n.inputs[k] === 'number') n.inputs[k] = Math.floor(Math.random() * 2147483647); } }
+      // A run shared across models (p.seeds, see seedPlan) draws its seeds from
+      // that run's number rather than from Math.random, in graph order — so a
+      // workflow with two samplers still gives each its own seed, and the same
+      // two the next model gets.
+      const rnd = p.seeds && p.seeds[i] != null ? seededRandom(p.seeds[i]) : Math.random;
+      if (!p.seedPinned) for (const n of Object.values(prompt)) { if (n.inputs) for (const k of Object.keys(n.inputs)) { if (k.includes('seed') && typeof n.inputs[k] === 'number') n.inputs[k] = Math.floor(rnd() * 2147483647); } }
       const pid = await submitPrompt(job, prompt, graph, log);
       if (!pid) {
         job._submitting = false;
@@ -711,7 +855,7 @@ export function launchJob(p) {
     job._node = 'Queued';
     bcast({ k: 'poke' });
     kickReconcile(300);
-  })();
+  })().finally(() => { myTurn.then(endTurn); });
   return id;
 }
 // Cancel has to reach three things, not the two it used to: the prompt on the
@@ -1297,10 +1441,7 @@ export default {
     });
     watch(wf, () => { startedId.value = null; if (skipNextFieldLoad) { skipNextFieldLoad = false; return; } loadFields(); });
 
-    // The image field holding a multi-file pick, if any. Only one field can drive a
-    // batch — fanning out over two of them would multiply into a job matrix nobody
-    // asked for, so the first one wins and the others keep their single value.
-    const batchField = computed(() => cfg.fields.find(f => f.enabled && f.kind === 'image_input' && Array.isArray(f.values) && f.values.length > 1) || null);
+    const batchField = computed(() => batchFieldOf(cfg.fields));
     const batchCount = computed(() => (batchField.value ? batchField.value.values.length : 0));
     function collectFieldValues() {
       const fv = {};
@@ -1366,37 +1507,47 @@ export default {
       const base = { workflowFile: wf.value, workflowLabel: label, embeddedWf: inherit ? meta.embeddedWf : null, source: { path: s.path, name: s.name, type: s.type }, promptText: pf ? applyReplacements(pf.value) : '', loras: loras.length ? loras : null, preset: selectedPreset.value, seedPinned, nodeEdits: edits, runs, matchSize: matchSizeFor(sizeFrom(mediaFields)) };
       // The prompt the job record shows is the one that job actually sends, so
       // it is built per variation rather than once from the whole rule list.
-      const launch = (extra, v, n) => launchJob(Object.assign({}, base, extra, {
+      // Every job gets its own copy of the field values with its model laid
+      // over them: launchJob writes the uploaded names into the object it is
+      // handed, so one object shared across jobs is one object several of them
+      // are writing to.
+      // Several models share their seeds slot by slot — a file and a variation —
+      // so what differs between them is the model (see seedPlan).
+      const combos = modelCombos(cfg.fields);
+      const seedsFor = seedPlan(runs, combos.length > 1 && !seedPinned);
+      const launch = (mc, extra, v, n, file) => launchJob(Object.assign({}, base, extra, {
+        fieldValues: Object.assign({}, extra.fieldValues, mc.values),
+        modelLabel: mc.label,
+        seeds: seedsFor((file || '') + '\n' + n),
         replacementRules: v,
         variationLabel: labelFor(v, n),
         promptText: pf ? applyReplacements(pf.value, v) : '',
       }));
-      // A multi-file pick fans out: one job per file, each doing `runs` runs. The
-      // source stays the media this dialog was opened from (it's what the graph is
-      // built around); displaySource only re-points the job's row/thumbnail at the
-      // file that job actually feeds in, so a batch isn't N identical-looking rows.
-      if (batchField.value) {
-        const bf = batchField.value;
-        let firstId = null;
-        for (const file of bf.values) {
-          const fv = Object.assign({}, collectFieldValues(), { [bf.id]: file });
-          const mf = mediaFields.filter(m => m.id !== bf.id).concat([{ id: bf.id, value: file, type: 'image' }]);
-          variations.forEach((v, n) => {
-            const id = launch({
+      let firstId = null;
+      const started = id => { if (!firstId) firstId = id; };
+      // Outermost, the models: every job one model runs is queued before the
+      // first job of the next, so ComfyUI loads each checkpoint once rather than
+      // once per job (see modelCombos, and Queue order at launchJob).
+      for (const mc of combos) {
+        // A multi-file pick fans out: one job per file, each doing `runs` runs. The
+        // source stays the media this dialog was opened from (it's what the graph is
+        // built around); displaySource only re-points the job's row/thumbnail at the
+        // file that job actually feeds in, so a batch isn't N identical-looking rows.
+        if (batchField.value) {
+          const bf = batchField.value;
+          for (const file of bf.values) {
+            const fv = Object.assign({}, collectFieldValues(), { [bf.id]: file });
+            const mf = mediaFields.filter(m => m.id !== bf.id).concat([{ id: bf.id, value: file, type: 'image' }]);
+            variations.forEach((v, n) => started(launch(mc, {
               fieldValues: fv, mediaFields: mf, matchSize: matchSizeFor(optionalImage(bf.id) ? sizeFrom(mf) : file),
               displaySource: { path: file, name: String(file).split(/[\\/]/).pop() },
-            }, v, n);
-            if (!firstId) firstId = id;
-          });
+            }, v, n, file)));
+          }
+          continue;
         }
-        startedId.value = firstId;
-        return;
+        const fv = collectFieldValues();
+        variations.forEach((v, n) => started(launch(mc, { fieldValues: fv, mediaFields }, v, n)));
       }
-      let firstId = null;
-      variations.forEach((v, n) => {
-        const id = launch({ fieldValues: collectFieldValues(), mediaFields }, v, n);
-        if (!firstId) firstId = id;
-      });
       startedId.value = firstId;
     }
     function close() { emit('close'); }
@@ -1558,6 +1709,16 @@ export default {
     // ×6 for a workflow whose prompt mentions none of the keywords, and the run
     // agreed with it: six identical jobs.
     const runVariations = computed(() => keptVariations(replScope.value).length);
+    // What the button queues once models or files multiply it. Only then are
+    // the variations counted here, so a plain run never pays for them.
+    const runModels = computed(() => modelCombos(cfg.fields).length);
+    const runFanout = computed(() => {
+      const models = runModels.value, files = batchCount.value || 1;
+      if (models < 2 && files < 2) return '';
+      return fanoutNote(models, files, runVariations.value, parseInt(runCount.value, 10) || 1);
+    });
+    // Jobs per ticked prompt, for the replacement panel's own count.
+    const runMultiplier = computed(() => runModels.value * (batchCount.value || 1));
     // The other half of the same question — rules that are set and cannot fire
     // — is stated by the replacements panel itself, as "N ignored" beside the
     // count of the ones that can. It was a paragraph here, above the Remix
@@ -1570,7 +1731,7 @@ export default {
       const f = (cfg.fields || []).find(x => x.kind === 'prompt' && x.enabled && !x.variant);
       return f && f.value != null ? String(f.value) : '';
     });
-    return { promptFieldText, replScope, promptChoice, pickWorkflow, resolvePromptChoice, runVariations,
+    return { promptFieldText, replScope, promptChoice, pickWorkflow, resolvePromptChoice, runVariations, runFanout, runMultiplier,
       store, src, tab, runCount, batchCount, workflows, wf, wfGroups, cfg, selectedPreset, scSaving, scSaved, canShortcut, shortcutHint, saveShortcut, deleteShortcut, isShortcut, currentWfLabel, currentWfShort,
       canUpdateWf, wfUpdating, wfUpdated, updateWorkflow, meta, job, isVideo, mediaUrl, toolsMenu, toolItem, remix, cancelJob, close, saveMsg, nodeFilter, saveLog, filteredNodes, nodeInputs,
       nodeEdits, editVal, setEdit,
@@ -1688,7 +1849,7 @@ export default {
               <select class="rmx-inp" v-model="runCount" style="width:70px" title="Number of runs"><option value="1">1×</option><option value="2">2×</option><option value="3">3×</option><option value="5">5×</option><option value="10">10×</option><option value="20">20×</option></select>
               <button v-if="!job || job.status!=='running'" class="rmx-btn go" @click="remix" :disabled="!wf">▶ Remix</button>
               <button v-else class="rmx-btn cancel" @click="cancelJob(job)">■ Cancel</button>
-              <span v-if="batchCount" class="rmx-mut" style="font-size:12px" :title="batchCount + ' selected files × ' + runCount + ' runs'">{{ batchCount }} files → {{ batchCount * runVariations }} jobs, {{ batchCount * runVariations * (parseInt(runCount,10)||1) }} runs total</span>
+              <span v-if="runFanout" class="rmx-mut" style="font-size:12px" title="Queued model by model, so each model loads once">{{ runFanout }}</span>
               <span class="rmx-status" v-if="job">{{ job.status==='running' ? (job._node||'…') : (job._node || job.status) }}</span>
               <span class="rmx-status" v-else>close this anytime — runs keep going in Jobs</span>
             </div>
@@ -1712,7 +1873,7 @@ export default {
                  behind it. Above the button it pushed the button itself down the
                  page; below the outputs it is where you go when the count on the
                  summary is not the one you wanted. -->
-            <replacement-rules :prompt="promptFieldText" :scope="replScope" :visible="tab==='run'"></replacement-rules>
+            <replacement-rules :prompt="promptFieldText" :scope="replScope" :visible="tab==='run'" :multiplier="runMultiplier"></replacement-rules>
           </div>
         </div>
       </div>
