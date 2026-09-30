@@ -28,7 +28,7 @@ export default {
       const have = ROOT_DEFS.filter(d => d.key === 'fav' || roots.value[d.key])
         .sort((a, b) => (b.key === 'fav') - (a.key === 'fav'));
       out.push({ key: 'media', icon: '🖼', label: 'Media',
-                 sub: have.map(d => d.key === 'fav' ? 'Favorites' : d.label.replace(/^ComfyUI /, '')).join(' · '),
+                 sub: have.map(d => d.label).join(' · '),
                  to: browseTo({ dir: roots.value.fav }, null, roots.value) });
       out.push({ key: 'jobs', icon: '⚡', label: 'Jobs', sub: 'Running and completed runs',
                  to: { name: 'jobs' } });

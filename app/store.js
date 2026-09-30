@@ -34,8 +34,8 @@ export const TYPES = [
 // Everything that switches between roots, heads a path with one or turns an
 // absolute path back into a URL reads this, so a root added here is one line.
 export const ROOT_DEFS = [
-  { key: 'out', label: 'ComfyUI Output', icon: '🎨', sub: 'Fresh from the queue' },
-  { key: 'in', label: 'ComfyUI Input', icon: '📥', sub: 'What runs are fed from' },
+  { key: 'out', label: 'Output', icon: '🎨', sub: 'Fresh from the queue' },
+  { key: 'in', label: 'Input', icon: '📥', sub: 'What runs are fed from' },
   { key: 'fav', label: 'Favorites', icon: '⭐', sub: 'Everything you kept' },
 ];
 export const rootLabel = key => (ROOT_DEFS.find(d => d.key === key) || ROOT_DEFS[ROOT_DEFS.length - 1]).label;
