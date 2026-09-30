@@ -11,6 +11,7 @@ Browse and curate your AI-generated media (images, video, audio), then **remix**
 > **License:** [CC BY-NC 4.0](LICENSE) — free to use, share, and modify **with credit** to [masteroleary/comfy-remix](https://github.com/masteroleary/comfy-remix); **commercial use requires written consent** (webdevllc@gmail.com).
 
 - **Start:** `cd comfy-remix && npm start` → serves on **http://localhost:8080** (HTTPS on **8443**).
+- **Or install the desktop app** (Windows, macOS, Linux) from [Releases](https://github.com/masteroleary/comfyui-remix/releases) — its own window, updates itself. See [Desktop app](#desktop-app).
 - **Auto-start:** can run headless at boot as a Windows scheduled task, before any user logs in — see [Run at startup](#run-at-startup-windows).
 - **API keys / settings:** click the **⚙** button in the app header (Civitai key, the ComfyUI URL, paths, and the password gate).
 
@@ -91,8 +92,37 @@ The app is **local-first**: your media library is served straight off your disk 
 |---|---|---|---|
 | **ComfyUI** | locally | Executes image/video workflows. The app proxies HTTP + WebSocket traffic to it (`comfyUrl`) for queueing runs, streaming progress, and uploading input images. | Nothing leaves the machine |
 | **Civitai** | cloud | API key stored for authenticated model downloads (some models require an account to fetch). | Only the download requests you trigger |
+| **GitHub Releases** | cloud | **Desktop app only:** checks for a new version 10s after launch and every 4 hours, and downloads it. | A request to github.com — your IP address and the fact that a copy is checking. Nothing about your media, prompts or settings |
 
-All API keys live in `config.json` (gitignored) and are managed via ⚙ Settings; each cloud feature detects a missing key, prompts for it on first use, and stays inactive until you provide one.
+All API keys live in `config.json` (gitignored) and are managed via ⚙ Settings; each cloud feature detects a missing key, prompts for it on first use, and stays inactive until you provide one. The desktop app's update check is the one background request; the server install makes none.
+
+---
+
+## Desktop app
+
+The same app as an installable program with its own window. Download the installer for
+your system from [Releases](https://github.com/masteroleary/comfyui-remix/releases):
+
+| System | File | First launch |
+|---|---|---|
+| Windows | `ComfyRemix-Setup-<version>.exe` | Installs for your user only, no admin. Until the installer is code-signed, Windows shows *"Windows protected your PC"* → **More info → Run anyway**. |
+| macOS | `ComfyRemix-<version>-arm64.dmg` (Apple Silicon) or `-x64.dmg` (Intel) | Until the app is signed and notarized, **right-click → Open** the first time. |
+| Linux | `ComfyRemix-<version>.AppImage` | `chmod +x` it, then run it. Some distros need `libfuse2`. |
+
+- **It only runs in its own window.** The desktop app's server listens on this machine
+  only and answers nothing but its own window; opening its address in a browser shows a
+  page saying so. For access from your phone or other devices, use the server install
+  (`npm start`) instead — the two are separate, with separate settings.
+- **Updates install themselves.** New versions download in the background; you get a
+  notification and a *Restart now / Later* prompt, and *Later* installs on your next quit.
+  On macOS this needs a signed build — until then, download new versions by hand.
+- **First run:** open ⚙ Settings → Config and set your ComfyUI URL and install folder.
+- **Where your data lives:** `%LOCALAPPDATA%\ComfyRemix` (Windows),
+  `~/Library/Application Support/ComfyRemix` (macOS), `~/.config/ComfyRemix` (Linux) —
+  settings, prompts, rules, the job list and logs. Uninstalling leaves it in place.
+- **Not in the desktop app:** Settings → Clean and the purge password. They drive a
+  Windows scheduled task that belongs to the server install, and on a machine running
+  both, the desktop app would be wiping the other install's library.
 
 ---
 

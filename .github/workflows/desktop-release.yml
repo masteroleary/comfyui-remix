@@ -1,0 +1,426 @@
+# ── Desktop release ────────────────────────────────────────────────────────
+# Builds the Electron app on Windows, macOS and Linux and publishes all three into
+# one GitHub release, which is the feed electron-updater reads updates from.
+#
+# To release:
+#   npm version patch        (or minor / major) — bumps package.json and the lock
+#                            file, commits, and creates the tag vX.Y.Z
+#   git push --follow-tags   pushes the commit and the tag; the tag arriving is
+#                            what starts this workflow
+#
+# A release that failed part-way is re-run from Actions → Desktop release → Run
+# workflow, naming the tag. It finds the draft the failed run made rather than
+# starting a second one, and the builder overwrites any file already on it.
+#
+# Releases can go on a separate public, releases-only repository instead, so this
+# one can go private without every install carrying a token that reads the source.
+# Create it with one commit (a README: its tags are cut from its default branch),
+# store a fine-grained token with Contents read/write on that repository alone as
+# the secret COMFYREMIX_RELEASES_TOKEN, and set the repository variable
+# COMFYREMIX_RELEASE_REPO to owner/name. Unset, releases stay here. Installs keep
+# the feed they were built with, so the first release built this way belongs on
+# this repository too, copied before it goes private, or the installs already out
+# never learn of the move.
+#
+# Signing is optional and stays off until its secrets exist (the packaging step
+# below). Windows installs unsigned, behind a SmartScreen warning, and updates
+# itself regardless. macOS does not: Squirrel.Mac, which electron-updater hands the
+# install to, will only install an update signed with a Developer ID. So until
+# MAC_CSC_LINK, MAC_CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD and
+# APPLE_TEAM_ID are set, the mac build is published and never updates itself — mac
+# users download each new version by hand.
+#
+# Why three jobs rather than a matrix that publishes as it goes. Three builds
+# uploading into one release race to create it: each looks for the release, finds
+# none, and creates its own — GitHub holds several drafts under one tag without
+# complaint — so the platforms end up on different releases. And a release made
+# visible before all three have finished hands every platform still uploading an
+# update feed with its files missing. So `prepare` creates the one draft before any
+# build starts, `build` only ever uploads into it, and `publish` makes it visible
+# once, after checking every platform's feed is on it.
+
+name: Desktop release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to (re)release, e.g. v1.2.3 — it must already exist'
+        required: true
+        type: string
+
+# Every job here writes to the release; nothing else is needed. With a releases
+# repository it is COMFYREMIX_RELEASES_TOKEN that writes and this token only reads
+# the tag, but `permissions` cannot depend on a variable, so it stays as it is.
+permissions:
+  contents: write
+
+# One run per tag at a time, and a second one queues rather than cancelling the
+# first: a run cancelled halfway through uploading leaves a draft holding half a
+# platform, which is exactly the state this workflow exists to never publish.
+concurrency:
+  group: desktop-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      # Where the release goes, decided once here so the three jobs cannot disagree
+      # about it. The token is not among them: an output carrying a secret is
+      # dropped, so each job picks its token from `release_external` instead.
+      release_repo: ${{ steps.target.outputs.repo }}
+      release_owner: ${{ steps.target.outputs.owner }}
+      release_name: ${{ steps.target.outputs.name }}
+      release_external: ${{ steps.target.outputs.external }}
+    steps:
+      # A variable naming a repository this workflow cannot write to fails here,
+      # not as a 404 from the first upload. And it fails rather than falling back to
+      # this repository: a feed that quietly went back to a repository which may by
+      # now be private is the one outcome the variable exists to prevent.
+      - name: Resolve where the release goes
+        id: target
+        env:
+          RELEASE_REPO: ${{ vars.COMFYREMIX_RELEASE_REPO }}
+          # Whether the secret exists, never its value — this step has no use for it.
+          HAS_RELEASES_TOKEN: ${{ secrets.COMFYREMIX_RELEASES_TOKEN != '' }}
+        run: |
+          # Naming this repository is the default spelled out, and behaves as it.
+          if [ -z "$RELEASE_REPO" ] || [ "${RELEASE_REPO,,}" = "${GITHUB_REPOSITORY,,}" ]; then
+            RELEASE_REPO=$GITHUB_REPOSITORY
+            EXTERNAL=false
+          else
+            # Checked because it is spliced into an API path below and handed to the
+            # builder as an owner and a name.
+            if ! [[ "$RELEASE_REPO" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]]; then
+              echo "::error title=COMFYREMIX_RELEASE_REPO is not owner/name::The repository variable COMFYREMIX_RELEASE_REPO must be owner/name (letters, digits and - . _ only). Fix it, or clear it to release on this repository."
+              exit 1
+            fi
+            if [ "$HAS_RELEASES_TOKEN" != true ]; then
+              echo "::error title=COMFYREMIX_RELEASES_TOKEN is not set::COMFYREMIX_RELEASE_REPO names $RELEASE_REPO, which this workflow's own token cannot write to. Add a fine-grained token with Contents read/write on $RELEASE_REPO alone as the secret COMFYREMIX_RELEASES_TOKEN, or clear the variable to release on this repository."
+              exit 1
+            fi
+            EXTERNAL=true
+          fi
+          {
+            echo "repo=$RELEASE_REPO"
+            echo "owner=${RELEASE_REPO%%/*}"
+            echo "name=${RELEASE_REPO#*/}"
+            echo "external=$EXTERNAL"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing on $RELEASE_REPO (separate releases repository: $EXTERNAL)"
+
+      # The tag's own package.json, not the branch head's: a workflow_dispatch run
+      # starts on whatever branch it was launched from, and that branch has usually
+      # moved on to the next version by the time a release needs re-running.
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+
+      # The tag and package.json must name the same version. The builder does not
+      # read the tag at all: it uploads into the release named `v` + package.json's
+      # version, and electron-updater compares that same version against the
+      # installed one. A mismatch therefore publishes into some other release — or
+      # into a new one the builder creates — while the draft for this tag stays
+      # empty, and an installer that reports the old version is offered to nobody.
+      - name: Resolve the tag and check it against package.json
+        id: resolve
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error title=Tag and version disagree::tag is '$TAG' but package.json version is '$VERSION' (the tag must be 'v$VERSION'). Release with 'npm version', which sets both."
+            exit 1
+          fi
+          # Semver or nothing: electron-updater cannot order anything else, and the
+          # tag is spliced into a jq filter below, so it must not carry a quote.
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error title=Not a semver version::package.json version '$VERSION' is not MAJOR.MINOR.PATCH[-pre][+build]."
+            exit 1
+          fi
+          # A hyphen before any +build part makes it a prerelease (1.3.0-beta.1).
+          CORE=${VERSION%%+*}
+          if [[ "$CORE" == *-* ]]; then PRERELEASE=true; else PRERELEASE=false; fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG (version $VERSION, prerelease: $PRERELEASE)"
+
+      # Created here, as a draft, before any build starts — see the header. A
+      # release that already exists is a re-run, and is taken over only while it is
+      # still a draft: the builder, handed a published release, does not fail but
+      # logs "skipped publishing" and goes green, so a re-run over a live release
+      # would report success having changed nothing — and rewriting one that
+      # clients are already updating from is not something a re-run should do
+      # anyway. The list endpoint rather than `gh release view`, because it also
+      # shows when a tag has more than one release, which is the race's leftover
+      # and would have the builder and this workflow disagreeing about which one
+      # is "the" release.
+      - name: Create the draft release, or take over the one a failed run left
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          PRERELEASE: ${{ steps.resolve.outputs.prerelease }}
+          EXTERNAL: ${{ steps.target.outputs.external }}
+          # Named rather than inferred from the checkout's remote, which gh would
+          # otherwise have to guess from — and would guess wrong for a releases
+          # repository, which is not the one checked out.
+          GH_REPO: ${{ steps.target.outputs.repo }}
+          # On this step alone: it is the only one in the job that writes.
+          GH_TOKEN: ${{ steps.target.outputs.external == 'true' && secrets.COMFYREMIX_RELEASES_TOKEN || github.token }}
+        run: |
+          found=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+                    --jq ".[] | select(.tag_name == \"$TAG\") | .draft")
+          case "$found" in
+            "")
+              # A prerelease is flagged from the start, so it never shows as Latest
+              # — which is the release stable installs update to.
+              pre=""
+              if [ "$PRERELEASE" = true ]; then pre="--prerelease"; fi
+              if [ "$EXTERNAL" = true ]; then
+                # The tag lives on this repository, not the releases one, so
+                # --verify-tag would look for it where it can never be. The
+                # releases repository cuts its own when the draft is published, from
+                # its default branch; this commit does not exist there, so there is
+                # no --target that would mean anything. And no --generate-notes: they
+                # would be this repository's commit messages, on a public page, for a
+                # repository made private precisely so they are not.
+                gh release create "$TAG" --draft $pre \
+                  --title "ComfyRemix $VERSION" --notes "ComfyRemix $TAG"
+              else
+                gh release create "$TAG" --draft $pre \
+                  --title "ComfyRemix $VERSION" --generate-notes --verify-tag
+              fi
+              ;;
+            true)
+              echo "A draft release for $TAG already exists on $GH_REPO; the builds will upload into it."
+              ;;
+            false)
+              echo "::error title=Release already published::$TAG is already a published release on $GH_REPO. Publish a new version rather than re-running this one."
+              exit 1
+              ;;
+            *)
+              echo "::error title=More than one release for $TAG::$(echo "$found" | wc -l) releases on $GH_REPO carry the tag $TAG. Delete the extra drafts, then re-run."
+              exit 1
+              ;;
+          esac
+
+  build:
+    needs: prepare
+    strategy:
+      # One platform failing does not cancel the other two: a leg stopped halfway
+      # through an upload leaves a partial file on the draft, and a re-run is easier
+      # to reason about when every leg ran to its own end. `publish` still waits for
+      # all three, so nothing is released either way.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    # Notarization waits on Apple. A wait that never ends would otherwise hold the
+    # runner, and the release, for the six-hour default.
+    timeout-minutes: 60
+    # bash on every runner, Windows included: the packaging step is a bash script,
+    # and the Windows default, PowerShell, treats `--` as its own end-of-parameters
+    # marker and can consume it on the way into npm's .ps1 shim — and then the
+    # builder's arguments are read by npm instead of being handed on to it.
+    defaults:
+      run:
+        shell: bash
+    # No credential is set on the job, and none is written to $GITHUB_ENV: both are
+    # inherited by every step, and most of these steps run code from the dependency
+    # tree. The token and the certificates exist on the packaging step only.
+    steps:
+      # Built from the tag, never from a branch: an installer built from anything
+      # else is not the version its feed says it is. No credentials are left in
+      # .git/config — nothing here pushes, and every install script `npm ci` runs
+      # could read a token left there.
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # The lock file, not package.json's ranges, so every platform ships the same
+      # dependency tree — and that means package-lock.json has to be committed.
+      - run: npm ci
+
+      # This and the packaging step are the two halves of `npm run desktop:dist`,
+      # split so that each gets only what it needs — keep them in step with it.
+      # Staging runs esbuild and javascript-obfuscator, and everything they pull in,
+      # over the app, and needs no credential at all; so it runs before any exists.
+      - name: Stage the app
+        run: node desktop/build.js
+
+      # `--publish always` uploads into the draft `prepare` made: the builder takes
+      # over any draft carrying its tag. The builder config's releaseType 'draft' is
+      # what keeps it from ever creating a published release of its own if that
+      # draft has somehow gone missing.
+      - name: Package, sign where configured, and upload to the draft release
+        env:
+          GH_TOKEN: ${{ needs.prepare.outputs.release_external == 'true' && secrets.COMFYREMIX_RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_EXTERNAL: ${{ needs.prepare.outputs.release_external }}
+          RELEASE_OWNER: ${{ needs.prepare.outputs.release_owner }}
+          RELEASE_NAME: ${{ needs.prepare.outputs.release_name }}
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          # Every signing secret moves out of the environment into a plain shell
+          # variable, which no child process inherits, and is handed back below only
+          # on the platform that uses it: the Windows build never holds the Apple
+          # credentials, nor the mac build the Windows certificate.
+          mac_csc_link=$MAC_CSC_LINK
+          mac_csc_key_password=$MAC_CSC_KEY_PASSWORD
+          apple_id=$APPLE_ID
+          apple_app_specific_password=$APPLE_APP_SPECIFIC_PASSWORD
+          apple_team_id=$APPLE_TEAM_ID
+          win_csc_link=$WIN_CSC_LINK
+          win_csc_key_password=$WIN_CSC_KEY_PASSWORD
+          unset MAC_CSC_LINK MAC_CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD \
+                APPLE_TEAM_ID WIN_CSC_LINK WIN_CSC_KEY_PASSWORD
+
+          # Each exported only when its secret exists. Put straight into `env:`, an
+          # unconfigured secret arrives as an empty string rather than as nothing,
+          # and the builder can take a CSC_LINK that is present-but-empty as a
+          # certificate to load, failing an unsigned build that would otherwise have
+          # gone through.
+          export_if_set() {
+            [ -n "$2" ] || return 0
+            export "$1=$2"
+            echo "$1 is set"
+          }
+          case "$RUNNER_OS" in
+            macOS)
+              # The mac certificate goes in as the builder's generic CSC_*, which it
+              # reads on macOS; the APPLE_* three are what it notarizes with.
+              export_if_set CSC_LINK "$mac_csc_link"
+              export_if_set CSC_KEY_PASSWORD "$mac_csc_key_password"
+              export_if_set APPLE_ID "$apple_id"
+              export_if_set APPLE_APP_SPECIFIC_PASSWORD "$apple_app_specific_password"
+              export_if_set APPLE_TEAM_ID "$apple_team_id"
+              [ -n "$mac_csc_link" ] || echo "::warning title=macOS build is unsigned::MAC_CSC_LINK is not set. The build is published, but installed copies cannot auto-update (Squirrel.Mac requires a Developer ID signature)."
+              ;;
+            Windows)
+              # WIN_CSC_* rather than CSC_*: the builder reads these on Windows ahead
+              # of the generic pair, so the two certificates can never be mixed up.
+              export_if_set WIN_CSC_LINK "$win_csc_link"
+              export_if_set WIN_CSC_KEY_PASSWORD "$win_csc_key_password"
+              ;;
+          esac
+
+          # The repository this build uploads into is also the feed it bakes into
+          # the installed app — electron-builder.config.js reads both from these.
+          # Left unset without a releases repository, so the config's own default
+          # stands exactly as it did.
+          if [ "$RELEASE_EXTERNAL" = true ]; then
+            export COMFYREMIX_RELEASE_OWNER="$RELEASE_OWNER"
+            export COMFYREMIX_RELEASE_REPO="$RELEASE_NAME"
+            echo "Uploading to, and baking in the feed of, $RELEASE_OWNER/$RELEASE_NAME"
+          fi
+
+          # --no: the electron-builder `npm ci` installed from the lock file, or a
+          # failure — never one fetched from the registry into a process that is
+          # holding the token and the certificates.
+          npx --no -- electron-builder --config electron-builder.config.js --publish always
+
+      # Kept for a week whether the build passed or not: when a publish goes wrong,
+      # what the builder actually produced is the first thing worth looking at. Named
+      # by pattern rather than as dist/release/*, which would also take the unpacked
+      # app directories — hundreds of megabytes of the installer's inputs, not its
+      # outputs. builder-effective-config.yaml comes along for the same inspection.
+      - name: Keep the build output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ runner.os }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            dist/release/*.exe
+            dist/release/*.msi
+            dist/release/*.dmg
+            dist/release/*.zip
+            dist/release/*.pkg
+            dist/release/*.AppImage
+            dist/release/*.deb
+            dist/release/*.rpm
+            dist/release/*.snap
+            dist/release/*.tar.gz
+            dist/release/*.blockmap
+            dist/release/*.yml
+            dist/release/*.yaml
+
+  publish:
+    needs: [prepare, build]
+    # Only when every leg of the matrix succeeded. A draft with one platform
+    # missing stays a draft: fix the leg, re-run, and it is completed in place.
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    # The token can sit on the job here: nothing but gh and the shell runs in it,
+    # and every step needs it.
+    env:
+      GH_TOKEN: ${{ needs.prepare.outputs.release_external == 'true' && secrets.COMFYREMIX_RELEASES_TOKEN || github.token }}
+      GH_REPO: ${{ needs.prepare.outputs.release_repo }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+    steps:
+      # The release is checked rather than the jobs' results, because a green build
+      # is not proof of an upload: the builder logs "skipped publishing" and exits 0
+      # when it decides a release is the wrong type. electron-updater reads one feed
+      # per platform — latest.yml on Windows, latest-mac.yml, latest-linux.yml — and
+      # a published release missing one strands that platform silently, its installs
+      # simply never seeing the update. So each feed must be on the release, and so
+      # must every file a feed names, or the update it offers is a 404.
+      - name: Check every platform's update feed is on the release
+        run: |
+          assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          echo "Assets on $TAG ($GH_REPO):"
+          echo "$assets" | sed 's/^/  /'
+          bad=0
+          for feed in latest.yml latest-mac.yml latest-linux.yml; do
+            if ! grep -Fxq "$feed" <<<"$assets"; then
+              echo "::error title=Update feed missing::$feed is not on the $TAG release — that platform's installs would never see this update."
+              bad=1
+            fi
+          done
+          [ "$bad" = 0 ] || exit 1
+
+          gh release download "$TAG" --pattern 'latest*.yml' --dir feeds
+          for feed in feeds/*.yml; do
+            # `- url: <file>` under files:, and the older top-level `path: <file>`.
+            while IFS= read -r file; do
+              [ -n "$file" ] || continue
+              if ! grep -Fxq "$file" <<<"$assets"; then
+                echo "::error title=Feed names a missing file::$(basename "$feed") points at $file, which is not on the $TAG release."
+                bad=1
+              fi
+            done < <(sed -nE "s/^[[:space:]]*(-[[:space:]]+)?(url|path):[[:space:]]*['\"]?([^'\"]+)['\"]?[[:space:]]*$/\3/p" "$feed" | sort -u)
+          done
+          exit $bad
+
+      # --latest decides which release /releases/latest names, and that is the one
+      # electron-updater offers every install not opted into prereleases. So a
+      # prerelease is published without it, or every stable install would be handed
+      # the beta.
+      - name: Publish the release
+        run: |
+          if [ "$PRERELEASE" = true ]; then latest=false; else latest=true; fi
+          gh release edit "$TAG" --draft=false --latest="$latest"
+          echo "Published $TAG on $GH_REPO (latest: $latest)"

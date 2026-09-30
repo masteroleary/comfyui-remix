@@ -1,14 +1,45 @@
 {
   "name": "comfy-remix",
+  "productName": "ComfyRemix",
   "license": "CC-BY-NC-4.0",
   "version": "1.0.0",
   "description": "Local browser, curator, and remixer for AI-generated media from ComfyUI",
-  "main": "server.js",
+  "author": "masteroleary",
+  "homepage": "https://github.com/masteroleary/comfyui-remix",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/masteroleary/comfyui-remix.git"
+  },
+  "main": "desktop/main.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js 8080",
-    "restart": "node restart.js"
+    "restart": "node restart.js",
+    "desktop": "electron .",
+    "desktop:icon": "electron desktop/render-icon.js",
+    "desktop:stage": "node desktop/build.js",
+    "desktop:dist": "node desktop/build.js && electron-builder --config electron-builder.config.js",
+    "desktop:dist:win": "node desktop/build.js && electron-builder --config electron-builder.config.js --win",
+    "desktop:dist:mac": "node desktop/build.js && electron-builder --config electron-builder.config.js --mac",
+    "desktop:dist:linux": "node desktop/build.js && electron-builder --config electron-builder.config.js --linux"
   },
-  "keywords": ["media-browser", "comfyui", "stable-diffusion", "workflow", "remix"],
-  "private": true
+  "keywords": [
+    "media-browser",
+    "comfyui",
+    "stable-diffusion",
+    "workflow",
+    "remix"
+  ],
+  "private": true,
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "@electron/asar": "^4.3.1",
+    "@electron/fuses": "^2.1.3",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "javascript-obfuscator": "^5.8.1"
+  }
 }

@@ -12,11 +12,59 @@ let fieldConfigGen = null;
 try { fieldConfigGen = require('./docs/field-config/gen_field_config.js'); }
 catch (e) { console.log('[FieldConfig] generator unavailable:', e.message); }
 
+// ── Desktop shell ──────────────────────────────────────────────────────────
+// The desktop app (desktop/main.js) runs this file in a child process and hands it
+// three things, and without them nothing below changes: `node server.js` is the same
+// server it always was.
+//
+// COMFYREMIX_DATA_DIR is where everything the server writes goes. In the packaged app
+// __dirname is inside a read-only archive, so config.json and the app-*.json stores
+// cannot sit beside the code the way they do in a checkout. Read-only inputs that ship
+// with the program (seed.json, default-workflows/) stay under __dirname.
+//
+// COMFYREMIX_SHELL_TOKEN is minted per launch and held only by that app's window, which
+// sends it on every request as x-comfyremix-shell. Anything without it is refused — so
+// an ordinary browser pointed at the port gets a page saying where the app is, not the
+// app. That is the point of the build: the user does not want this running in a
+// browser that reports home.
+//
+// COMFYREMIX_PORT is the loopback port the window was told to load. It stays fixed for
+// the app's lifetime, because a restart that came back somewhere else would strand
+// the page polling the old one.
+const DATA_DIR = process.env.COMFYREMIX_DATA_DIR ? path.resolve(process.env.COMFYREMIX_DATA_DIR) : __dirname;
+const SHELL_TOKEN = process.env.COMFYREMIX_SHELL_TOKEN || '';
+const IN_SHELL = !!SHELL_TOKEN;
+// The other direction: stamped on every response, and the window cancels any response
+// from its port that lacks it. A second secret rather than one derived from the token,
+// because whatever squats the port while this server is down — a crash, a restart —
+// receives the token on the window's very next request, and could compute anything
+// derived from it. It never sees this one: only a live, real server sends it.
+const SHELL_PROOF = process.env.COMFYREMIX_SHELL_PROOF || '';
+
+// Constant-time, and a length mismatch is a plain refusal: timingSafeEqual throws on
+// unequal lengths rather than answering false.
+function shellOk(req) {
+  if (!IN_SHELL) return true;
+  const got = Buffer.from(String(req.headers['x-comfyremix-shell'] || ''));
+  const want = Buffer.from(SHELL_TOKEN);
+  return got.length === want.length && crypto.timingSafeEqual(got, want);
+}
+
+const SHELL_ONLY_PAGE = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+  + '<meta name="viewport" content="width=device-width, initial-scale=1"><title>ComfyRemix</title>'
+  + '<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d0d0d;'
+  + 'color:#ddd;font:15px/1.5 system-ui,sans-serif}main{max-width:26rem;padding:24px;text-align:center}'
+  + 'h1{font-size:18px;margin:0 0 8px}</style></head><body><main><h1>ComfyRemix runs in its own window</h1>'
+  + '<p>This address belongs to the ComfyRemix desktop app, and it only answers that app. '
+  + 'Open ComfyRemix from your applications instead of a browser.</p></main></body></html>';
+
 // Load config
 // COMFYREMIX_CONFIG lets a second instance run against its own config file. Without
 // it, a test instance shares — and rewrites — the live one, which is a good way to
 // destroy settings the running server is still holding in memory.
-const CONFIG_PATH = process.env.COMFYREMIX_CONFIG || path.join(__dirname, 'config.json');
+// Not in the desktop app: it inherits whatever environment launched it, and a shell left
+// pointing at a test instance's config would have the app read and rewrite that file.
+const CONFIG_PATH = (!IN_SHELL && process.env.COMFYREMIX_CONFIG) || path.join(DATA_DIR, 'config.json');
 // Strip a BOM before parsing: PowerShell's Out-File/Set-Content write UTF-8 *with*
 // one by default, and JSON.parse chokes on it — an edit from a shell would
 // otherwise leave the server unable to start at all (workflow files get the same
@@ -24,8 +72,17 @@ const CONFIG_PATH = process.env.COMFYREMIX_CONFIG || path.join(__dirname, 'confi
 const readConfigFile = () => JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^﻿/, ''));
 const config = fs.existsSync(CONFIG_PATH) ? readConfigFile() : {};
 
-const PORT = parseInt(process.argv[2], 10) || config.port || 8080;
-const ROOT = process.argv[3] ? path.resolve(process.argv[3]) : (config.mediaDir || path.join(__dirname, 'Media'));
+// The desktop app's port comes from the app, never from config.port: that one is the
+// server install's, and a desktop copy on the same machine would collide with it.
+const PORT = IN_SHELL
+  ? (parseInt(process.env.COMFYREMIX_PORT, 10) || 0)
+  : (parseInt(process.argv[2], 10) || config.port || 8080);
+const ROOT = !IN_SHELL && process.argv[3] ? path.resolve(process.argv[3]) : (config.mediaDir || path.join(DATA_DIR, 'Media'));
+// Read once, then gone: every process this server starts (ffmpeg, the ComfyUI launcher
+// and so ComfyUI and each of its custom nodes) would otherwise inherit the secrets.
+delete process.env.COMFYREMIX_SHELL_TOKEN;
+delete process.env.COMFYREMIX_SHELL_PROOF;
+delete process.env.COMFYREMIX_PORT;
 // The media root IS the Favorites collection — favoriting moves files here and
 // the app exposes it as the single "Favorites" tab (no separate Archive tab).
 const FAVORITES_DIR = ROOT;
@@ -616,7 +673,7 @@ function embedVideoText(filePath, comment, cb) {
 // ── Prompt search index ─────────────────────────────────────────────────
 // Maps PNG path -> embedded prompt text so /api/list search can match prompt
 // words, not just file names. Incremental by mtime, persisted across restarts.
-const PROMPT_INDEX_PATH = path.join(__dirname, 'app-prompt-index.json');
+const PROMPT_INDEX_PATH = path.join(DATA_DIR, 'app-prompt-index.json');
 const PROMPT_INDEX_VERSION = 6; // bump to force a full re-extract after extractor changes (v6: index the [keyword] tokens the embedded workflow still carries)
 
 // Content filter: indexed prompt text is matched against a term list (stored
@@ -1663,7 +1720,7 @@ function detectPresetGroups(wf) {
 // is a leftover of the classic controls: nothing reads it now, and it is kept
 // in the shape only so an older build finds what it left.
 let WORKFLOWS_DIR = path.join(COMFY_DIR, 'user', 'default', 'workflows');
-const WF_STORE_PATH = path.join(__dirname, 'app-workflows.json');
+const WF_STORE_PATH = path.join(DATA_DIR, 'app-workflows.json');
 
 // The prompt library: named blocks of prompt text, filed under a category.
 // Both lists are seeded rather than fixed, and the Prompts page adds to either.
@@ -1677,8 +1734,8 @@ const WF_STORE_PATH = path.join(__dirname, 'app-workflows.json');
 // editing seed.json changes what a NEW install starts with, never what an
 // existing one has. Ids are derived from category + name, so filling in the text
 // of a seeded row later leaves every rule that picked it pointing where it was.
-const PROMPTS_PATH = path.join(__dirname, 'app-prompts.json');
-const REPL_PATH = path.join(__dirname, 'app-replacements.json');
+const PROMPTS_PATH = path.join(DATA_DIR, 'app-prompts.json');
+const REPL_PATH = path.join(DATA_DIR, 'app-replacements.json');
 // Strip C0 controls from anything headed for the shared stores. pickKeyOf on
 // the client joins a rule find to a library category with a control character
 // and relies on neither side containing one; trim() does not remove them.
@@ -2451,10 +2508,13 @@ function restoreParts() {
     // A stray file dropped into config/ therefore has nowhere to land: a restore cannot
     // write anything into the app directory that a backup did not put there.
     { key: 'config', name: 'config', label: 'Settings, workflows, prompts and rules',
-      to: __dirname, state: true },
+      to: DATA_DIR, state: true },
   ];
 }
-const restoreStateMap = () => Object.fromEntries(maintStateFiles().map(p => [path.basename(p), p]));
+// seed.json is part of the program in the desktop app, inside its read-only archive —
+// backed up like the rest, but there is nowhere to restore it to.
+const restoreStateMap = () => Object.fromEntries(maintStateFiles()
+  .filter(p => !(IN_SHELL && p === SEED_PATH)).map(p => [path.basename(p), p]));
 
 // What a dated folder is named, so the picker landing on the folder *above* one can say
 // so and list what is in there rather than just reporting nothing.
@@ -2692,6 +2752,11 @@ function maintLog() {
 }
 
 function maintTaskInfo(cb) {
+  // The desktop app never drives the task. It is registered once per machine, and the
+  // request file carries no paths: the task wipes what the *server install's* config
+  // names, from C:\ProgramData\ComfyRemix. A desktop copy on the same machine asking
+  // for a run would empty the other install's library behind a backup of its own folders.
+  if (IN_SHELL) { cb({ available: false, reason: 'Clean belongs to the server install; the desktop app cannot run it.' }); return; }
   if (!IS_WIN) { cb({ available: false, reason: 'Cleaning runs through a Windows scheduled task; this server is not on Windows.' }); return; }
   execFile('schtasks', ['/query', '/tn', MAINT_TASK], { windowsHide: true, timeout: 10000 }, err => {
     cb(err
@@ -2797,6 +2862,8 @@ const PURGE_SELECTION = Object.fromEntries(
 // the status file the first run is writing into.
 let purgeFiredAt = 0;
 function startPurge(why) {
+  // Same reason as maintTaskInfo: in the desktop app this would fire the server install's wipe.
+  if (IN_SHELL) { console.log('[Purge] ignored in the desktop app: ' + why); return; }
   const now = Date.now();
   if (now - purgeFiredAt < 5 * 60 * 1000) return;
   purgeFiredAt = now;
@@ -2866,6 +2933,20 @@ function sameOriginOk(req) {
 }
 
 const server = http.createServer((req, res) => {
+  // First, ahead of CORS and the password gate: in the desktop app nothing but its own
+  // window gets an answer, the lock screen included.
+  if (!shellOk(req)) {
+    if (String(req.headers.accept || '').includes('text/html')) {
+      res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(SHELL_ONLY_PAGE);
+    } else {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ error: 'This server only answers the ComfyRemix app window' }));
+    }
+    return;
+  }
+
+  if (SHELL_PROOF) res.setHeader('x-comfyremix-proof', SHELL_PROOF);
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (req.method === 'OPTIONS') {
@@ -2880,7 +2961,11 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  // A Host header a URL cannot parse ("a b") throws here, and an uncaught throw takes the
+  // whole server down — anyone who can reach the port could do it at will.
+  let url;
+  try { url = new URL(req.url, `http://${req.headers.host}`); }
+  catch { res.writeHead(400); res.end('Bad request'); return; }
   const pn = url.pathname;
 
   // ── Password gate ────────────────────────────────────────────────────────
@@ -2995,7 +3080,11 @@ const server = http.createServer((req, res) => {
     const dir = path.join(__dirname, 'vendor');
     const fp = path.join(dir, rel);
     if (/^[a-z0-9._-]+\.js$/i.test(rel) && path.resolve(fp).startsWith(path.resolve(dir))) {
-      res.setHeader('Cache-Control', 'public, max-age=86400');
+      // Revalidated in the desktop app instead: a copy Chromium replays from its cache
+      // carries whatever proof header it was stored with, and the window cancels any
+      // response whose proof is not this launch's — a blank app, the one time the
+      // startup cache clear did not happen.
+      res.setHeader('Cache-Control', IN_SHELL ? 'no-cache' : 'public, max-age=86400');
       serveFile(fp, req, res); return;
     }
     res.writeHead(404); res.end('Not found'); return;
@@ -3007,7 +3096,7 @@ const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', c => body += c);
     req.on('end', () => {
-      fs.writeFileSync(path.join(__dirname, 'debug-results.json'), body, 'utf8');
+      fs.writeFileSync(path.join(DATA_DIR, 'debug-results.json'), body, 'utf8');
       jsonRes(res, { ok: true });
     });
     return;
@@ -3982,7 +4071,7 @@ runTests();
       // exactly the sentence that must not be readable from in front of the gate.
       security: {
         enabled: authState().enabled, hasPassword: authState().hasPassword,
-        hasPurgePassword: authState().hasPurge, purgeSupported: process.platform === 'win32',
+        hasPurgePassword: authState().hasPurge, purgeSupported: process.platform === 'win32' && !IN_SHELL,
       },
     });
     return;
@@ -4410,6 +4499,19 @@ runTests();
   if (pn === '/api/restart' && req.method === 'POST') {
     let responded = false;
     const done = (obj, code) => { if (!responded) { responded = true; jsonRes(res, obj, code || 200); } };
+    // The desktop app restarts its own child; the helper would be the wrong tool twice
+    // over. process.execPath is the Electron binary there, not node, so spawning it
+    // with a script launches a second copy of the app — and with the RunAsNode fuse
+    // off it could not be made to run the helper anyway.
+    if (IN_SHELL) {
+      done({ restarting: true, port: PORT, via: 'desktop app' });
+      setTimeout(() => {
+        console.log('[Restart] exiting; the desktop app starts a fresh server on the same port');
+        try { server.close(); } catch {}
+        process.exit(0);
+      }, 350);
+      return;
+    }
     let spawnErr = null;
     let helper = null;
     try {
@@ -4520,9 +4622,10 @@ runTests();
         // the copy will cost is not sent: it depends on which rows are ticked right now,
         // which only the page knows, and it sums the same report rows the totals do.
         backupDir: config.maintenanceBackupDir || '',
-        job: maintJob(),
-        log: maintLog(),
-        report: maintReadJson('maintenance-report.json'),
+        // Those files are the server install's; the desktop app has no business reading them.
+        job: IN_SHELL ? null : maintJob(),
+        log: IN_SHELL ? '' : maintLog(),
+        report: IN_SHELL ? null : maintReadJson('maintenance-report.json'),
       });
     });
     return;
@@ -4585,6 +4688,7 @@ runTests();
   // through the same task, and the wrapper decides the mode from the kind, so a scan
   // cannot be talked into deleting by anything sent from here.
   if ((pn === '/api/maintenance/scan' || pn === '/api/maintenance/clean') && req.method === 'POST') {
+    if (IN_SHELL) { jsonRes(res, { error: 'Clean belongs to the server install; the desktop app cannot run it.' }, 403); return; }
     const kind = pn.endsWith('/scan') ? 'scan' : 'clean';
     let bodyStr = '';
     req.on('data', c => bodyStr += c);
@@ -5079,7 +5183,11 @@ server.on('upgrade', (req, socket, head) => {
   // in one afternoon, each time looking like "the app is just gone".
   socket.on('error', e => console.log('[WS Proxy] client socket error:', e.code || e.message));
 
-  const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+  // The token before anything else is read, and the parse guarded as in the request
+  // handler — here it used to run first, so a bad Host was a crash that needed no token.
+  if (!shellOk(req)) { socket.destroy(); return; }
+  let reqUrl;
+  try { reqUrl = new URL(req.url, `http://${req.headers.host}`); } catch { socket.destroy(); return; }
   if (!reqUrl.pathname.startsWith('/comfy-ws') || !isAuthed(req)) {
     socket.destroy();
     return;
@@ -5109,6 +5217,7 @@ server.on('upgrade', (req, socket, head) => {
     for (const [k, v] of Object.entries(proxyRes.headers)) {
       response += `${k}: ${v}\r\n`;
     }
+    if (SHELL_PROOF) response += 'x-comfyremix-proof: ' + SHELL_PROOF + '\r\n';
     response += '\r\n';
     socket.write(response);
     if (proxyHead.length) socket.write(proxyHead);
@@ -5130,18 +5239,27 @@ server.on('upgrade', (req, socket, head) => {
 // '127.0.0.1' to make HTTP loopback-only. That is what actually forces remote clients
 // through the mTLS-guarded HTTPS port -- otherwise HTTP is an unauthenticated way in
 // that bypasses the client-cert check entirely.
-const HTTP_HOST = config.httpHost || '0.0.0.0';
+//
+// The desktop app ignores all of it: IPv4 loopback only, whatever config says. The
+// window loads 127.0.0.1 by number, so there is no `localhost` for the IPv6 listener
+// below to rescue, and the HTTPS listener exists for other devices, which is exactly
+// what this build refuses to serve.
+const HTTP_HOST = IN_SHELL ? '127.0.0.1' : (config.httpHost || '0.0.0.0');
 const HTTP_LOOPBACK_ONLY = HTTP_HOST === '127.0.0.1' || HTTP_HOST === 'localhost';
 server.listen(PORT, HTTP_LOOPBACK_ONLY ? '127.0.0.1' : HTTP_HOST, () => {
-  console.log(`Media Browser: http://localhost:${PORT}${HTTP_LOOPBACK_ONLY ? '  (loopback only)' : ''}`);
+  const bound = server.address().port;
+  console.log(`Media Browser: http://localhost:${bound}${HTTP_LOOPBACK_ONLY ? '  (loopback only)' : ''}${IN_SHELL ? '  (desktop app)' : ''}`);
   console.log(`Serving: ${ROOT}`);
   console.log(`Favorites: ${FAVORITES_DIR}`);
+  // The desktop app waits for this before loading the window. parentPort only exists
+  // when Electron's utilityProcess started us, so a plain node run skips it.
+  if (process.parentPort) process.parentPort.postMessage({ type: 'listening', port: bound });
 });
 
 // Windows resolves `localhost` to ::1 before 127.0.0.1, so an IPv4-only loopback bind
 // leaves http://localhost:PORT failing while http://127.0.0.1:PORT works. Give the
 // IPv6 loopback its own listener sharing the same handlers rather than leave that trap.
-if (HTTP_LOOPBACK_ONLY) {
+if (HTTP_LOOPBACK_ONLY && !IN_SHELL) {
   const v6 = http.createServer(server.listeners('request')[0]);
   for (const listener of server.listeners('upgrade')) v6.on('upgrade', listener);
   v6.on('error', e => console.log(`IPv6 loopback listener not started: ${e.message}`));
@@ -5152,7 +5270,7 @@ if (HTTP_LOOPBACK_ONLY) {
 const HTTPS_PORT = parseInt(config.httpsPort, 10) || 8443;
 const CERT_PATH = path.join(__dirname, 'certs', 'cert.pem');
 const KEY_PATH = path.join(__dirname, 'certs', 'key.pem');
-if (fs.existsSync(CERT_PATH) && fs.existsSync(KEY_PATH)) {
+if (!IN_SHELL && fs.existsSync(CERT_PATH) && fs.existsSync(KEY_PATH)) {
   try {
     const tls = require('tls');
     const httpsMod = require('https');

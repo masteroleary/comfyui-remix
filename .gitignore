@@ -20,6 +20,8 @@ Thumbs.db
 
 # Node
 node_modules/
+# Desktop build output: the obfuscated stage and the installers
+dist/
 certs/
 
 # Local setup/maintenance scripts and run logs (machine-specific)
@@ -37,6 +39,9 @@ app-prompts*.json
 app-prompt-index.json
 debug-results.json
 Workflows/
+# ...which, on a case-insensitive checkout (Windows, macOS), also matches
+# .github/workflows/ — and CI files ignored there never reach the repo at all.
+!.github/workflows/
 
 # Machine-specific runbook (real paths, task names, firewall rules)
 CLAUDE.local.md

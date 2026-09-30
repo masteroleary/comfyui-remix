@@ -14,11 +14,22 @@ node server.js 8080 /path/to/media # override port and media root
 - After editing **server.js**, restart the server (`npm run restart`) for changes to take effect.
 - Everything under `app/`, plus `index.html` and the stylesheets, is served straight from disk; just reload the browser, no restart needed.
 
+```bash
+npm run desktop                    # the desktop app from source (Electron, unobfuscated, DevTools on)
+npm run desktop:dist:win           # stage + obfuscate + package: dist/release/ComfyRemix-Setup-<v>.exe
+npm run desktop:dist:mac           # (on a Mac) dmg + zip, x64 and arm64
+npm run desktop:dist:linux         # AppImage
+```
+
+The server stays zero-dependency; `npm install` is only needed for the desktop build.
+See *Desktop app* below.
+
 ## Architecture
 
 - **server.js** — Node.js HTTP server (no external dependencies). Serves the front end, exposes REST APIs for listing/favoriting/deleting media, and proxies ComfyUI (HTTP + WebSocket).
 - **index.html** — a small shell only: the stylesheet/script tags and the mount point. The application lives in `app/`.
 - **app/** — the SPA, as native ES modules with no build step. `router.js` (routes), `store.js` (shared reactive state), `format.js` (`fmtNum`/`fmtBytes`, shared rather than copied: a second `fmtBytes` is the kind of thing that quietly rounds differently and reports one folder at two sizes on two pages), `views/` (one per route), `components/` (the chrome, the dialogs and the shared pieces below). Vue 3 is the global build, vendored under `vendor/`.
+- **desktop/** — the Electron build: `main.js` (the shell), `build.js` + `leak-rules.js` (staging), `verify-package.js` (the package check), `render-icon.js` and `resources/icon.png`. With `electron-builder.config.js` and `.github/workflows/desktop-release.yml`.
 - **config.json** — Runtime config (ports, paths, API keys). Gitignored; create it by copying `config.example.json`.
 - **Media/** — Default media root browsed by the app. Gitignored.
 
@@ -607,6 +618,126 @@ Caveats when running under a service account (e.g. Windows SYSTEM) or otherwise 
 
 - Service accounts don't inherit your per-user `PATH`, so `ffmpeg` / `ffprobe` may not resolve by name. server.js locates them and stores absolute paths at startup (`findFfBin`; override with `ffmpegDir` in config). A bare `ffprobe` invocation fails silently under a service account and video metadata comes back `null`.
 - Use **one** autostart mechanism only — two instances collide on port 8080 (`EADDRINUSE`).
+
+## Desktop app
+
+The same server and front end, packaged with Electron as an installable program for
+Windows, macOS and Linux that updates itself. It exists for two promises, and most of
+what follows is how each is kept: **it never runs in an ordinary browser**, and **the
+installer does not hand over the source.**
+
+### How it runs
+
+`desktop/main.js` starts `server.js` in an Electron `utilityProcess` and shows it in
+its own window. It hands the server three environment variables, and `server.js`
+changes behaviour only when they are present — `node server.js` is exactly the server
+it always was:
+
+- `COMFYREMIX_DATA_DIR` — where everything the server writes goes (`config.json`, the
+  `app-*.json` stores, the default `Media/`). Inside the package `__dirname` is a
+  read-only archive; the data dir is the OS's per-user app-data folder
+  (`%LOCALAPPDATA%\ComfyRemix` — local, not roaming, since it holds keys, prompts and by
+  default the library — `~/Library/Application Support/ComfyRemix`,
+  `~/.config/ComfyRemix`). Read-only inputs (`seed.json`, `default-workflows/`) stay
+  under `__dirname`, which is why a restore skips `seed.json` there.
+- `COMFYREMIX_SHELL_TOKEN` — minted **per server start**, held only in memory, and
+  stamped onto every request the window makes to `127.0.0.1:<port>` (`x-comfyremix-shell`,
+  added below the page in `webRequest`, never visible to it, and stripped from every
+  other request so it cannot follow a redirect). `shellOk` refuses anything without it
+  **first**, ahead of CORS, URL parsing and the password gate, and the WebSocket upgrade
+  checks it before anything else too. A browser pointed at the port gets a page saying
+  where the app is.
+- `COMFYREMIX_SHELL_PROOF` — the other direction, once per launch: the server stamps it
+  on every response (`x-comfyremix-proof`, the WS 101 included) and the window cancels
+  any response from its port without it. Whatever squats the port while the server
+  restarts receives one request's token — useless, since the next server gets a new one
+  — and is never believed. It is a separate secret, not derived from the token, because
+  the squatter has the token.
+- `COMFYREMIX_PORT` — **remembered across launches** in `desktop-port.json`. The port is
+  the page's origin, and the origin owns its storage (the job list, the ComfyUI client
+  id, every preference): a new port per launch was a new, empty app per launch. A fresh
+  one is taken only when the old one is busy.
+
+The server deletes all three from `process.env` once read, so ffmpeg, the ComfyUI
+launcher (and so ComfyUI and its custom nodes) never inherit them, and it ignores an
+inherited `COMFYREMIX_CONFIG` in this mode.
+
+In this mode the server binds `127.0.0.1` only, with no IPv6 or HTTPS listener: the
+HTTPS/mTLS listener exists for other devices, which is exactly what this build refuses.
+**Remote access is the server install's job**; the two are separate installs with
+separate settings.
+
+**Clean and the purge password are off in the desktop app** (`maintTaskInfo` reports it
+unavailable, the endpoints refuse, `startPurge` ignores it). The scheduled task is one per
+machine and wipes what the *server install's* config names, from `C:\ProgramData\ComfyRemix`
+— a desktop copy asking for a run would empty the other install's library behind a backup
+of its own folders.
+
+The window is locked down in `main.js`: context isolation, sandbox, no Node; navigation
+and popups to anything but its own origin go to the system browser (http(s) only);
+`onBeforeRequest` cancels any request that is not its own server or `data:`/`blob:`;
+permissions are fullscreen and clipboard-write only; spellcheck is off (it downloads
+dictionaries from Google); the installed app refuses to start with **any** command-line
+switch except the few that legitimately arrive (`--updated` from the installer, macOS
+`-psn_…`, Linux `--no-sandbox`), and "installed" is judged by running from `app.asar`,
+not by the exe's name; logs record routes, never paths or queries;
+the HTTP cache is cleared at startup (not at quit — that path belongs to the updater);
+and a **Content-Security-Policy** limits the window to its own server for every image,
+script, font and connection. The policy is loose about scripts — `unsafe-eval` for Vue's
+runtime template compiler, `unsafe-inline` for the lock screen — so its value is the
+privacy guarantee, not XSS hardening. **Anything a page wants from elsewhere has to come
+through the server**, as CivitAI already does.
+
+### Source protection
+
+`desktop/build.js` builds `dist/stage` from an **explicit allowlist** (a new root asset
+needs naming there as well as in the server's static allowlist, and in
+`verify-package.js`'s `ALLOWED`), minifies every first-party script with esbuild (every
+comment goes) and runs it through javascript-obfuscator with deliberately mild options.
+**Do not widen them without re-crawling the UI**: templates are compiled at runtime and
+read `setup()`'s keys by name, so renaming properties or object keys breaks the app
+silently. `electron-builder.config.js` maps `files` to the stage and nothing else;
+`desktop/verify-package.js` then opens the `app.asar` that was actually produced and
+fails the build on any file outside the expected shape, any path that looks like a
+secret (`leak-rules.js`, shared with build.js), any non-production package, or any
+canary comment phrase surviving. It is **read-only** because on Windows the asar
+integrity hash is embedded before it runs.
+
+Electron fuses (in the builder config) turn off `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`
+and `--inspect`, load only from the archive, and check the archive's integrity at
+startup. `--remote-debugging-port` is not a fuse, so `main.js` refuses to start with it.
+DevTools are off in the packaged app.
+
+This is a deterrent, not encryption — obfuscated code is still code — and **the
+repository is public**, so none of it hides anything from someone who reads GitHub.
+Keeping the source private means a private repository plus a separate public,
+releases-only one for the update feed (`COMFYREMIX_RELEASE_OWNER`/`_REPO` at build
+time): a private feed would make every install carry a token that can read the source.
+
+### Releases and auto-update
+
+`npm version patch|minor|major` then `git push --follow-tags`. The workflow checks the
+tag matches `package.json` (electron-updater compares versions, so a mismatch publishes
+an update nobody receives), creates a **draft** release, builds all three platforms into
+it, and publishes it only when every platform succeeded and all three feeds
+(`latest.yml`, `latest-mac.yml`, `latest-linux.yml`) and the files they name are
+attached. Clients never see a draft, so none is offered a half-uploaded release.
+
+Installed copies check 10s after launch and every 4h, download in the background, notify,
+and offer **Restart now / Later**; Later installs on the next quit. Windows installs are
+per-user (no admin, silent updates). **macOS updates need a Developer ID signature**
+(`MAC_CSC_LINK` and the `APPLE_*` secrets); without it the build is ad-hoc signed so it
+launches, but Mac users download new versions by hand. A failed check is logged, never
+shown — the menu's *Check for Updates…* reports it.
+
+To exercise the whole update path without publishing, build with
+`COMFYREMIX_UPDATE_URL=http://127.0.0.1:<port>/` (a generic feed baked in at build time,
+never set in CI), serve the newer build's `latest.yml` + installer from that folder, and
+run the older one.
+
+**Testing note:** some environments (VS Code's extension host among them) export
+`ELECTRON_RUN_AS_NODE=1`, which makes a *development* Electron start as plain Node.
+Unset it before `npm run desktop`. The packaged app ignores it — that is the fuse.
 
 ## Cleaning up (Settings → Clean)
 
