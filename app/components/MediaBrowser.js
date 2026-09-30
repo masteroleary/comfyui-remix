@@ -81,7 +81,7 @@ export default {
         <div class="mb-roots">
           <button v-for="t in rootTabs" :key="t.key" :class="{on: activeRoot===t.key}" @click="switchRoot(t.key)" :disabled="!roots[t.key]">{{ t.label }}</button>
         </div>
-        <input class="rmx-inp mb-search" type="search" placeholder="Search names & prompts…" v-model="search" @input="onSearch">
+        <input autocomplete="off" class="rmx-inp mb-search" type="search" placeholder="Search names & prompts…" v-model="search" @input="onSearch">
         <button class="rmx-btn2" @click="openWords" title="Browse prompt words"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px"><path d="M20.6 13.4l-7.1 7.1a2 2 0 0 1-2.8 0l-6.2-6.2A2 2 0 0 1 3.9 12.8l.5-7a1.5 1.5 0 0 1 1.4-1.4l7-.5a2 2 0 0 1 1.5.6l6.3 6.3a2 2 0 0 1 0 2.6z"/><circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none"/></svg></button>
         <button class="rmx-btn2" @click="cycleSort" :title="'Sort: ' + sortLabel">{{ sortLabel }}</button>
         <button v-if="state.parent && !search" class="rmx-btn2" @click="load(state.parent)">↑ Up</button>
@@ -106,7 +106,7 @@ export default {
       </div>
       <div v-if="words.open" class="mb-words" data-backdrop @click.self="words.open=false">
         <div class="mb-words-panel">
-          <input class="rmx-inp" type="search" placeholder="Filter prompt words…" v-model="words.filter" style="width:100%;margin-bottom:8px">
+          <input autocomplete="off" class="rmx-inp" type="search" placeholder="Filter prompt words…" v-model="words.filter" style="width:100%;margin-bottom:8px">
           <div v-if="words.loading" class="rmx-mut">Loading…</div>
           <div v-else class="mb-words-list">
             <div v-for="w in filteredWords" :key="w.t" class="mb-word" @click="pickWord(w)"><span>{{ w.t }}</span><span class="rmx-mut">{{ w.n }}</span></div>

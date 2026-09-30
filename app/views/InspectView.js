@@ -1124,7 +1124,7 @@ export default {
             <h2>Nodes ({{ nodeEntries.length }})</h2><span class="accordion-arrow">▶</span>
           </div>
           <div class="accordion-body">
-            <input type="text" class="node-search" placeholder="Search nodes..." v-model="nodeSearch">
+            <input autocomplete="off" type="text" class="node-search" placeholder="Search nodes..." v-model="nodeSearch">
             <div class="node-grid">
               <div v-for="n in visibleNodes" :key="n.id" class="node-card"
                    :class="{ editable: n.editable.length, editing: editingId === n.id, edited: editedIds.has(n.id) }">
@@ -1138,10 +1138,10 @@ export default {
                 <div v-if="n.editable.length && editingId === n.id" class="node-edit-form" :ref="setEditForm">
                   <template v-for="e in n.editable" :key="e.key">
                     <label class="edit-label">{{ e.key }}</label>
-                    <textarea v-if="e.type === 'string' && String(e.val).length > 50"
+                    <textarea autocomplete="off" v-if="e.type === 'string' && String(e.val).length > 50"
                               class="edit-input" rows="6" v-model="editDraft[e.key]"></textarea>
-                    <input v-else-if="e.type === 'number'" type="number" class="edit-input" step="any" v-model="editDraft[e.key]">
-                    <input v-else type="text" class="edit-input" v-model="editDraft[e.key]">
+                    <input autocomplete="off" v-else-if="e.type === 'number'" type="number" class="edit-input" step="any" v-model="editDraft[e.key]">
+                    <input autocomplete="off" v-else type="text" class="edit-input" v-model="editDraft[e.key]">
                   </template>
                   <div class="edit-actions">
                     <button class="btn btn-apply" @click.stop="applyEdit(n)">Apply</button>

@@ -1640,7 +1640,7 @@ export default {
             <div v-else-if="meta.unlistedWf" class="rmx-warn">This was made with <b>{{ meta.unlistedWf.label }}</b>, which isn't in your dropdown — running ⤷ Inherit until you add it. <button class="rmx-btn2" style="margin-left:6px" :disabled="meta.adding" @click="addUnlistedWf">{{ meta.adding ? 'Adding…' : 'Add it' }}</button></div>
             <div v-else-if="meta.metadataFrom" class="rmx-mut" style="margin:-6px 0 12px;font-size:11.5px">Workflow read from the companion still <b>{{ meta.metadataFrom }}</b> — the clip itself carries no metadata.</div>
             <div v-if="wfSave.open" class="rmx-run" style="margin:-6px 0 12px">
-              <input class="rmx-inp" :class="{taken: wfNameTaken}" style="flex:1;min-width:0" v-model="wfSave.name" placeholder="Workflow name" spellcheck="false" @keyup.enter="saveEmbeddedWf" @keyup.esc="wfSave.open=false">
+              <input autocomplete="off" class="rmx-inp" :class="{taken: wfNameTaken}" style="flex:1;min-width:0" v-model="wfSave.name" placeholder="Workflow name" spellcheck="false" @keyup.enter="saveEmbeddedWf" @keyup.esc="wfSave.open=false">
               <button class="rmx-btn2" :disabled="wfSave.busy || !wfSave.name.trim() || wfNameTaken" @click="saveEmbeddedWf">{{ wfSave.busy ? 'Exporting…' : 'Export' }}</button>
               <button class="rmx-btn2" @click="wfSave.open=false">Cancel</button>
             </div>
@@ -1666,13 +1666,13 @@ export default {
             <details class="rmx-hidden" v-if="meta.embedded" style="margin-top:12px">
               <summary>Source workflow · {{ Object.keys(meta.embedded).length }} nodes</summary>
               <div style="padding:6px 12px 12px">
-                <input class="rmx-inp" style="width:100%;margin-bottom:8px" placeholder="Filter nodes…" v-model="nodeFilter">
+                <input autocomplete="off" class="rmx-inp" style="width:100%;margin-bottom:8px" placeholder="Filter nodes…" v-model="nodeFilter">
                 <div class="rmx-mut" style="font-size:11px;margin-bottom:6px">Edit a value to override it on the next run (applied when the node is in the built graph). ⚠ can break the workflow.</div>
                 <details v-for="[id,n] in filteredNodes" :key="id" class="rmx-node" :class="{edited: nodeEdits[id]}">
                   <summary>[{{id}}] {{ n.class_type }}<span v-if="n._meta&&n._meta.title" class="rmx-mut"> · {{ n._meta.title }}</span></summary>
                   <div class="rmx-node-body"><div v-for="[k,v] in nodeInputs(n)" :key="k" class="rmx-node-inp">
                     <span class="rmx-node-k">{{k}}</span>
-                    <input v-if="v.editable" class="rmx-inp rmx-node-edit" :class="{edited: nodeEdits[id] && k in nodeEdits[id]}" :type="v.num ? 'number' : 'text'" :step="v.num ? 'any' : null" :value="editVal(id,k,v.raw)" @change="setEdit(id,k,v.raw,$event.target.value)" :title="'node '+id+' · '+k">
+                    <input autocomplete="off" v-if="v.editable" class="rmx-inp rmx-node-edit" :class="{edited: nodeEdits[id] && k in nodeEdits[id]}" :type="v.num ? 'number' : 'text'" :step="v.num ? 'any' : null" :value="editVal(id,k,v.raw)" @change="setEdit(id,k,v.raw,$event.target.value)" :title="'node '+id+' · '+k">
                     <span v-else class="rmx-node-v">{{ v.disp }}</span>
                   </div></div>
                 </details>
@@ -1739,13 +1739,13 @@ export default {
     <div v-if="wfLib.open" class="rmx-picker-overlay" data-backdrop @click.self="wfLib.open=false">
       <div class="rmx-picker" style="max-width:720px">
         <div class="rmx-picker-head"><b>Workflow library</b><span class="rmx-mut" style="text-transform:none">{{ wfLibCount }} of {{ wfLib.items.length }} in the dropdown</span><button class="rmx-x" style="margin-left:auto" @click="wfLib.open=false">✕</button></div>
-        <div class="mb-toolbar"><input class="rmx-inp mb-search" v-model="wfLib.q" placeholder="Search workflows…"></div>
+        <div class="mb-toolbar"><input autocomplete="off" class="rmx-inp mb-search" v-model="wfLib.q" placeholder="Search workflows…"></div>
         <div style="overflow:auto;flex:1;min-height:0;padding:8px 12px">
           <div v-if="wfLib.busy && !wfLib.items.length" class="rmx-mut" style="padding:16px">Loading…</div>
           <div v-else-if="!wfLibShown.length" class="rmx-mut" style="padding:16px">No workflows match.</div>
           <div v-for="w in wfLibShown" :key="w.name" class="rmx-lib-row">
             <input type="checkbox" class="rmx-tgl" v-model="w.enabled" :title="w.enabled ? 'Remove from the dropdown' : 'Add to the dropdown'">
-            <input class="rmx-inp" v-model="w.label" placeholder="label" title="Shown in the Workflow dropdown">
+            <input autocomplete="off" class="rmx-inp" v-model="w.label" placeholder="label" title="Shown in the Workflow dropdown">
             <span class="rmx-mut rmx-lib-name" :title="w.name">{{ w.name }}</span>
             <span v-if="w.enabled && wfLibDupes.has((w.label||w.name).trim().toLowerCase())" class="rmx-lib-warn"
                   title="Another enabled workflow uses this same label — rename one so you can tell them apart">⚠</span>

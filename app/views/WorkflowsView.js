@@ -273,12 +273,12 @@ export default {
             <span class="rmx-mut" style="text-transform:none">{{ libCount }} of {{ libShown.length }} in the library</span>
             <button class="rmx-x" style="margin-left:auto" @click="cancelLib">✕</button>
           </div>
-          <div class="mb-toolbar"><input class="rmx-inp mb-search" v-model="lib.q" placeholder="Search workflows…"></div>
+          <div class="mb-toolbar"><input autocomplete="off" class="rmx-inp mb-search" v-model="lib.q" placeholder="Search workflows…"></div>
           <div style="overflow:auto;flex:1;min-height:0;padding:8px 12px">
             <div v-if="!libShown.length" class="rmx-mut" style="padding:16px">No workflows match.</div>
             <div v-for="w in libShown" :key="w.name" class="rmx-lib-row">
               <input type="checkbox" class="rmx-tgl" v-model="w.enabled" :title="w.enabled ? 'Remove from the library' : 'Add to the library'">
-              <input class="rmx-inp" v-model="w.label" placeholder="label" title="Shown wherever the workflow is listed">
+              <input autocomplete="off" class="rmx-inp" v-model="w.label" placeholder="label" title="Shown wherever the workflow is listed">
               <span class="rmx-mut rmx-lib-name" :title="w.name">{{ w.name }}</span>
               <span v-if="w.enabled && libDupes.has((w.label||w.name).trim().toLowerCase())" class="rmx-lib-warn"
                     title="Another workflow in the library uses this same label — rename one so you can tell them apart">⚠</span>

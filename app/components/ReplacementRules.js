@@ -1051,7 +1051,7 @@ export default {
                     :title="dotTitle(row)"></span>
               <input type="checkbox" :checked="row.on" @change="toggleRow(row)" title="Enable this row">
               <span class="rmx-repl-find">
-                <input type="text" class="rmx-inp" placeholder="find, or [keyword]" :value="row.from"
+                <input autocomplete="off" type="text" class="rmx-inp" placeholder="find, or [keyword]" :value="row.from"
                        @focus="openMenu(row.id)" @click="openMenu(row.id)" @blur="closeMenu" @keydown.esc="onFindEsc"
                        @input="setFrom(row, $event.target.value)" @change="saveReplacements">
                 <!-- mousedown is prevented on the whole menu so the input keeps
@@ -1131,7 +1131,7 @@ export default {
                   </div>
                 </template>
               </span>
-              <input v-else type="text" class="rmx-inp" placeholder="replace with" v-model="row.rules[0].to" @change="saveReplacements">
+              <input autocomplete="off" v-else type="text" class="rmx-inp" placeholder="replace with" v-model="row.rules[0].to" @change="saveReplacements">
               <button type="button" class="rmx-repl-del" :title="row.keyword ? 'Delete this keyword and every answer to it' : 'Delete rule'" @click="delRow(row)">✕</button>
             </div>
             <div v-if="variations.length > 1" class="rmx-mut" style="font-size:12px;margin-top:8px">

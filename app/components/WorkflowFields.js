@@ -248,9 +248,9 @@ const FieldControl = {
     return { t: computed(() => ctype(props.field)), comboOpts, searchable, locked, shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
   },
   template: `
-    <textarea v-if="t==='multiline'" v-autosize class="rmx-inp rmx-ta" style="width:100%" rows="2" v-model="field.value"></textarea>
+    <textarea autocomplete="off" v-if="t==='multiline'" v-autosize class="rmx-inp rmx-ta" style="width:100%" rows="2" v-model="field.value"></textarea>
     <span v-else-if="field.kind==='seed'" class="rmx-seedwrap">
-      <input type="number" class="rmx-inp" style="width:160px" v-model="field.value" placeholder="random" min="0">
+      <input autocomplete="off" type="number" class="rmx-inp" style="width:160px" v-model="field.value" placeholder="random" min="0">
       <button type="button" class="rmx-seed" :class="{on: field._pin}" @click="field._pin = !field._pin"
               :title="field._pin ? 'Pinned — exact seed each run' : 'Random each run'"><span class="thumb">{{ field._pin ? '📌' : '🎲' }}</span></button>
       <button v-if="field._mediaSeed != null && String(field.value).trim()===''" type="button" class="rmx-btn2"
@@ -258,7 +258,7 @@ const FieldControl = {
               :title="'Pin the seed this file was generated with (' + field._mediaSeed + ')'">↺ this file's seed</button>
     </span>
     <input v-else-if="t==='boolean'" type="checkbox" v-model="field.value" style="width:16px;height:16px;accent-color:#0a84ff">
-    <input v-else-if="t==='int' || t==='float'" type="number" class="rmx-inp" style="width:120px" :step="t==='float' ? '0.01' : '1'" v-model="field.value"
+    <input autocomplete="off" v-else-if="t==='int' || t==='float'" type="number" class="rmx-inp" style="width:120px" :step="t==='float' ? '0.01' : '1'" v-model="field.value"
            :disabled="locked" :title="locked ? 'Coming from the input image — untick Match Input Image to set it here' : null">
     <ComboSearch v-else-if="t==='combo' && searchable" v-model="field.value" :options="comboOpts"
                  :placeholder="field.kind==='model' ? 'Search models and folders…' : 'Search…'" />
@@ -267,7 +267,7 @@ const FieldControl = {
       <div v-for="e in visibleLoras" :key="e.i" class="rmx-lora" :class="{off: !e.r.on, sug: !!e.match}">
         <input type="checkbox" v-model="e.r.on"><label :title="e.r.lora">{{ shortLora(e.r.lora) }}</label>
         <span v-if="e.match" class="rmx-lora-hit" :title="'&quot;' + e.match + '&quot; is in the prompt — tick to use this lora'">{{ e.match }}</span>
-        <input type="number" step="0.05" v-model.number="e.r.strength">
+        <input autocomplete="off" type="number" step="0.05" v-model.number="e.r.strength">
       </div>
       <div v-for="s in library.list" :key="'lib:'+s.lora" class="rmx-lora sug">
         <input type="checkbox" :checked="false" :title="'Add ' + shortLora(s.lora) + ' to this workflow'" @change="addFromLibrary(s.lora)">
@@ -280,7 +280,7 @@ const FieldControl = {
       <div v-else-if="hiddenCount || loraExpanded" class="rmx-lora-more" @click="loraExpanded=!loraExpanded"><span>{{ loraExpanded ? 'Hide disabled loras' : ('＋ ' + hiddenCount + ' more lora' + (hiddenCount===1?'':'s')) }}</span><span class="rmx-lora-arrow" :class="{open: loraExpanded}">▾</span></div>
     </div>
     <span v-else-if="t==='image' || t==='video' || t==='audio'" class="rmx-imgf">
-      <input type="text" class="rmx-inp" style="width:200px" v-model="field.value"
+      <input autocomplete="off" type="text" class="rmx-inp" style="width:200px" v-model="field.value"
              :placeholder="field.control && field.control.optional ? 'optional — empty leaves it off' : null"
              :title="field.control && field.control.optional ? 'The node behind this image is bypassed in the workflow. Picking one switches it on for the run; leaving it empty keeps it off.' : null">
       <button v-if="openPicker && t==='image'" type="button" class="rmx-btn2" @click="openPicker(field)">🖼 Browse</button>
@@ -295,7 +295,7 @@ const FieldControl = {
         </div>
       </div>
     </span>
-    <input v-else type="text" class="rmx-inp" style="width:280px;max-width:100%" v-model="field.value">
+    <input autocomplete="off" v-else type="text" class="rmx-inp" style="width:280px;max-width:100%" v-model="field.value">
   `,
 };
 

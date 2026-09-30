@@ -113,7 +113,7 @@ export default {
             {{ c }}<button class="pr-cat-x" :title="'Remove ' + c" @click="removeCategory(c)">✕</button>
           </span>
           <span class="pr-cat-new">
-            <input class="wf-map-sel" v-model="newCat" placeholder="New category" @keydown.enter="addCategory">
+            <input autocomplete="off" class="wf-map-sel" v-model="newCat" placeholder="New category" @keydown.enter="addCategory">
             <button class="wf-add" :disabled="!newCat.trim()" @click="addCategory">Add</button>
           </span>
         </div>
@@ -137,14 +137,14 @@ export default {
           <div v-if="!g.prompts.length" class="pr-group-empty">Nothing filed here yet.</div>
           <div v-for="p in g.prompts" :key="p.id" class="pr-row">
             <div class="pr-row-top">
-              <input class="pr-name" v-model="p.name" placeholder="Name — what the dropdown shows" @change="persist()">
+              <input autocomplete="off" class="pr-name" v-model="p.name" placeholder="Name — what the dropdown shows" @change="persist()">
               <select class="pr-cat" v-model="p.category" @change="persist()">
                 <option v-for="c in lib.categories" :key="c" :value="c">{{ c }}</option>
                 <option v-if="g.orphan" :value="p.category">{{ p.category || '(none)' }}</option>
               </select>
               <button class="pr-del" title="Delete this prompt" @click="removePrompt(p)">🗑</button>
             </div>
-            <textarea v-autosize class="pr-text" rows="2" v-model="p.text"
+            <textarea autocomplete="off" v-autosize class="pr-text" rows="2" v-model="p.text"
                       placeholder="The text this prompt stands for" @change="persist()"></textarea>
           </div>
         </div>
