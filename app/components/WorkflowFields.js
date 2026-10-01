@@ -235,6 +235,11 @@ const FieldControl = {
     });
     const openPicker = inject('openPicker', null);
     const addLoraRow = inject('addLoraRow', null);
+    // The search at the foot of a lora stack (see "The lora search" in the form).
+    const loraSearch = inject('loraSearch', null);
+    const loraSearchOpts = computed(() => (loraSearch && ctype(props.field) === 'lora_rows' ? loraSearch.optionsFor(props.field) : []));
+    const loraChosen = computed(() => (loraSearch && loraSearchOpts.value.length ? loraSearch.chosenFor(props.field, loraSearchOpts.value) : []));
+    const loraAbout = computed(() => (loraSearch ? loraSearch.about.value : ''));
     // Width/Height while "Match Input Image" is on. The numbers are about to be
     // replaced by the ones measured off the file going in, so an editable box
     // here would be offering a value no run will ever use.
@@ -271,7 +276,7 @@ const FieldControl = {
       const names = bases.map(b => b.label);
       return 'These are ' + names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] + ' models — LoRAs, VAEs and text encoders made for one family fail or do nothing on another.';
     });
-    return { t: computed(() => ctype(props.field)), comboOpts, searchable, modelWarn, locked, shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
+    return { t: computed(() => ctype(props.field)), comboOpts, searchable, modelWarn, loraSearch, loraSearchOpts, loraChosen, loraAbout, locked, shortLora, loraExpanded, visibleLoras, hiddenCount, library, libExpanded, addFromLibrary, openPicker, dropPicked, fileUrl };
   },
   template: `
     <textarea autocomplete="off" v-if="t==='multiline'" v-autosize class="rmx-inp rmx-ta" style="width:100%" rows="2" v-model="field.value"></textarea>
@@ -305,6 +310,13 @@ const FieldControl = {
       <div v-if="library.more || libExpanded" class="rmx-lora-more" @click="libExpanded=!libExpanded"><span>{{ libExpanded ? 'Hide extra library matches' : ('＋ ' + library.more + ' more in your library match the prompt') }}</span><span class="rmx-lora-arrow" :class="{open: libExpanded}">▾</span></div>
       <div v-if="!field.value.length && !library.list.length" class="rmx-mut" style="font-size:12px">no lora slots</div>
       <div v-else-if="hiddenCount || loraExpanded" class="rmx-lora-more" @click="loraExpanded=!loraExpanded"><span>{{ loraExpanded ? 'Hide disabled loras' : ('＋ ' + hiddenCount + ' more lora' + (hiddenCount===1?'':'s')) }}</span><span class="rmx-lora-arrow" :class="{open: loraExpanded}">▾</span></div>
+      <!-- After the list: search the whole library and switch loras on from it.
+           Hidden until /api/loras answers — with nothing listed there is nothing
+           to search, and an empty box would say the library is empty. -->
+      <div v-if="loraSearchOpts.length" class="rmx-lora-search">
+        <ComboSearch multi :options="loraSearchOpts" :chosen="loraChosen" unit="lora" recent-key="crx.recentLoras"
+                     :about="loraAbout" placeholder="Search loras to add…" @toggle="loraSearch.toggle(field, $event)" />
+      </div>
     </div>
     <span v-else-if="t==='image' || t==='video' || t==='audio'" class="rmx-imgf">
       <input autocomplete="off" type="text" class="rmx-inp" style="width:200px" v-model="field.value"
@@ -503,11 +515,13 @@ export default {
     const jget = url => fetch(url, { credentials: 'same-origin' }).then(x => x.json());
     const loraOptions = ref([]);
     const loraTerms = ref(null);   // word -> how many loras carry it; built server-side from the library
+    const loraFolders = ref([]);   // every folder ComfyUI looks in for loras, as it reports them
     (async () => {
       try {
         const d = await jget('/api/loras');
         loraOptions.value = (d && d.loras) || [];
         loraTerms.value = (d && d.index && d.index.terms) || null;
+        loraFolders.value = (d && Array.isArray(d.folders)) ? d.folders : [];
       } catch (e) {}
     })();
     // High <-> Low swap. `\b` is useless here: `_` is a word character, so
@@ -591,6 +605,69 @@ export default {
     // loraOptions stays dialog-local: suggestLibrary and the high/low pair lookup
     // read it here, and nothing injects it since the Add LoRA box went.
     provide('addLoraRow', addLoraRow);
+
+    // ── The lora search under each stack ────────────────────────────────
+    // The model field's pills, pointed at the lora library: every lora ComfyUI
+    // lists, which is every folder it looks in (/api/loras asks it). A lit pill
+    // is a row of this stack that is switched on; clicking one switches that row
+    // off, and clicking an unlit one switches its row on or adds it. The rows
+    // stay the record — the search only ever edits them.
+    //
+    // A lora is a pair as far as this goes, as it is for addLoraRow: with a
+    // High/Low pair of loaders, each stack searches its own half (the same swap
+    // suggestLibrary makes, so a LOW file is never offered to the high stack),
+    // and switching one on or off does the same to its counterpart in the other.
+    const loraKey = s => String(s == null ? '' : s).replace(/\\/g, '/').toLowerCase();
+    const loraStacks = () => fields.value.filter(f => f.enabled && f.kind === 'lora_list');
+    function loraSearchOptions(field) {
+      const wantHigh = loraStacks().length === 2 ? loraFieldIsHigh(field) : null;
+      if (wantHigh === null) return loraOptions.value;
+      const out = [], seen = new Set();
+      for (const name of loraOptions.value) {
+        let use = name;
+        if (hasNoiseMark(name)) {
+          const alt = loraByLower.value.get(swapHiLo(name, !wantHigh).toLowerCase());
+          if (alt) use = alt;
+          else if (wantHigh ? nameIsLow(name) : nameIsHigh(name)) continue;
+        }
+        if (seen.has(use)) continue;
+        seen.add(use); out.push(use);
+      }
+      return out;
+    }
+    // Spelled as the options are, so the pills can light by plain comparison;
+    // matched loosely, since a saved graph can spell a subfolder with a
+    // backslash where ComfyUI's list has a forward slash.
+    function loraChosen(field, options) {
+      const on = new Set((Array.isArray(field.value) ? field.value : []).filter(r => r && r.on).map(r => loraKey(r.lora)));
+      return on.size ? options.filter(o => on.has(loraKey(o))) : [];
+    }
+    function setLoraOn(f, name, on) {
+      if (!Array.isArray(f.value)) f.value = [];
+      const k = loraKey(name);
+      const rows = f.value.filter(r => r && loraKey(r.lora) === k);
+      if (on) { if (rows.length) rows[0].on = true; else f.value.push(newLoraRow(name, true)); return; }
+      // A row added from here or from the library suggestions was never part of
+      // the workflow, so switching it off removes it rather than leaving one more
+      // disabled row behind "＋ N more".
+      for (const r of rows) {
+        if (r._new) f.value.splice(f.value.indexOf(r), 1);
+        else r.on = false;
+      }
+    }
+    function toggleLora(field, name) {
+      const on = !(Array.isArray(field.value) ? field.value : []).some(r => r && r.on && loraKey(r.lora) === loraKey(name));
+      setLoraOn(field, name, on);
+      const stacks = loraStacks();
+      if (stacks.length !== 2 || !stacks.some(f => f.id === field.id)) return;
+      const other = stacks.find(f => f.id !== field.id);
+      const twin = counterpartFor(name, other, field);
+      if (twin) setLoraOn(other, twin, on);
+    }
+    const loraAbout = computed(() => (loraFolders.value.length
+      ? 'every lora ComfyUI finds in ' + loraFolders.value.join(', ')
+      : ''));
+    provide('loraSearch', { optionsFor: loraSearchOptions, chosenFor: loraChosen, toggle: toggleLora, about: loraAbout });
 
     // Words in the *positive* prompt only — a lora surfacing because the thing
     // you asked NOT to see is named in the negative prompt would be backwards.

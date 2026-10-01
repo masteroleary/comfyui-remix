@@ -157,6 +157,19 @@ usually the same bug: something the host provided instead of the component.
   SDXL LoRA loads on both; and while the box is empty the **recently picked**
   models are offered as dashed pills, from one localStorage list filtered to
   what this field's options contain.
+  It also owns **the lora search** at the foot of every lora stack — the same
+  box and pills, over the whole lora library. Its selection is not its own:
+  `ComboSearch` takes `chosen` (the stack's switched-on rows) and only reports a
+  click, and the form switches the row on, adds it, or switches it off — a row
+  that was never in the workflow is removed rather than left disabled. A High/Low
+  pair is one lora here as it is for `addLoraRow`: each stack offers its own half
+  (the swap `suggestLibrary` makes) and a toggle mirrors into the counterpart.
+  The library is **what ComfyUI lists**, every folder it looks in:
+  `/api/loras` asks ComfyUI's `/models/loras` and `/internal/folder_paths`
+  through `comfyUrl` rather than reading a disk path, since on a Docker install
+  those folders (`/models_ext/loras`, …) are container paths this process
+  cannot see. The folders are on the box's hover; `/object_info` stays the
+  fallback, and `loraDir`, when set, still replaces all of it.
 - **`components/MediaBrowser.js`** — the gallery a media field opens.
 - **`components/MediaTile.js`** — one card: square thumbnail flush to the tile,
   info bar under it. The thumbnail opens the viewer, the bar raises Remix. Used

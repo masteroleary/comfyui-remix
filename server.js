@@ -1866,11 +1866,12 @@ function buildLoraIndex(names) {
   return { terms, cutoff, loras: (names || []).length, words: df.size, kept: Object.keys(terms).length };
 }
 // Optional `loraDir` — a folder of model files readable by this process. Left
-// unset the names come from ComfyUI's lora list instead, which is ComfyUI
-// enumerating the same directory; the Remix dialog already cannot build a field
-// config without object_info, so that source costs nothing extra. Set this only
-// when the models are on a path this process can actually reach (they are not,
-// when ComfyUI runs in a container with its own model mount).
+// unset the names come from ComfyUI itself (see /api/loras), which is the only
+// thing that knows every folder it looks in: its own models/loras, whatever
+// extra_model_paths.yaml adds, and output/loras. Set this only when the models
+// are on a path this process can actually reach (they are not, when ComfyUI
+// runs in a container with its own model mount) — and note that it then
+// replaces ComfyUI's answer rather than adding to it.
 function loraNamesFromDisk() {
   const dir = config.loraDir;
   if (!dir) return [];
@@ -1885,6 +1886,26 @@ function loraNamesFromDisk() {
   };
   walk(dir, '');
   return out;
+}
+// A small JSON GET against ComfyUI, bounded: /api/loras answers a form that is
+// waiting on it, and a ComfyUI that is slow to answer must not leave the lora
+// search empty for good. Not for /object_info, whose ten-second wait before the
+// first byte is normal and has its own cache and progress reporting.
+function comfyGetJson(p, ms) {
+  return new Promise((resolve, reject) => {
+    const ch = comfyHostPort();
+    const req = http.request({ hostname: ch.hostname, port: ch.port, path: p, method: 'GET', headers: { Accept: 'application/json' } }, (r) => {
+      let body = '';
+      r.on('data', c => body += c);
+      r.on('end', () => {
+        if (r.statusCode !== 200) { reject(new Error('HTTP ' + r.statusCode)); return; }
+        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+      });
+    });
+    req.setTimeout(ms || 10000, () => req.destroy(new Error('no answer from ComfyUI')));
+    req.on('error', reject);
+    req.end();
+  });
 }
 if (config.loraDir) {
   const n = loraNamesFromDisk();
@@ -4763,10 +4784,29 @@ runTests();
   }
 
   // API: Generate the field config for a workflow (detected fields + user edits).
-  // API: list available LoRA files (for the Remix form's "add LoRA row" picker).
+  // API: list available LoRA files — the Remix form's library suggestions, its
+  // high/low pairing, and the lora search under each stack.
+  //
+  // Asked of ComfyUI rather than read off a disk path, because ComfyUI is the
+  // one that knows where it looks: on a Docker install its folders are container
+  // paths (/opt/ComfyUI/models/loras, /models_ext/loras, output/loras) that this
+  // process cannot see at all, and every name it lists is spelled exactly as a
+  // loader wants it. /models/loras is the same merged list LoraLoader offers,
+  // without the ten-second /object_info wait; /internal/folder_paths says which
+  // folders that list came from, so the search can say what it covered.
+  // object_info stays as the fallback for a ComfyUI too old to have either.
   if (pn === '/api/loras' && req.method === 'GET') {
     (async () => {
       let loras = loraNamesFromDisk();
+      let folders = loras.length ? [config.loraDir] : [];
+      if (!loras.length) {
+        const [names, paths] = await Promise.all([
+          comfyGetJson('/models/loras').catch(() => null),
+          comfyGetJson('/internal/folder_paths').catch(() => null),
+        ]);
+        if (Array.isArray(names)) loras = names.filter(n => typeof n === 'string' && n);
+        if (paths && Array.isArray(paths.loras)) folders = paths.loras.filter(p => typeof p === 'string');
+      }
       if (!loras.length) {
         let objectInfo = null; try { objectInfo = await getObjectInfo(); } catch (e) {}
         if (objectInfo) {
@@ -4777,7 +4817,7 @@ runTests();
           }
         }
       }
-      jsonRes(res, { loras, index: buildLoraIndex(loras) });
+      jsonRes(res, { loras, index: buildLoraIndex(loras), folders });
     })();
     return;
   }

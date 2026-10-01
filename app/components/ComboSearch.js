@@ -34,6 +34,15 @@
 // does not move out from under the cursor between two clicks. With the box
 // empty they are the picks themselves, in pick order, which is the order the
 // run queues them in.
+//
+// ── Selection owned by the host (`chosen`) ─────────────────────────────────
+// The lora search under each stack is the same box and the same pills, but
+// what is selected is not this component's to keep: it is which rows of the
+// stack are switched on, and the rows are the record. So with `chosen` given,
+// the pills light from it, a click is only reported (`toggle`), and the host
+// adds, switches on or switches off the row. There is no arrived-with state —
+// nothing is replaced, a lora is simply on or off — and with the box empty no
+// pills repeat the selection, because the rows directly above already are it.
 const { ref, computed, watch, nextTick, onBeforeUnmount } = window.Vue;
 
 const norm = s => String(s == null ? '' : s).replace(/\\/g, '/');
@@ -52,19 +61,18 @@ const PILLS = 30;
 export const shortModel = s => splitPath(s).name.replace(/\.safetensors$/i, '');
 // ── Recently picked ──
 // The models you keep comparing, offered as pills while the box is empty so
-// they are one click rather than a search each time. One list across every
-// multi picker, newest first; each field only shows the ones its own options
-// contain, which is what keeps a checkpoint out of a UNET loader's row.
-// localStorage, so it is this browser's and may come back empty — a private
-// window, cleared site data, or the accessor throwing outright.
-const RECENT_KEY = 'crx.recentModels';
+// they are one click rather than a search each time. One list per `recentKey`
+// (models, loras) across every picker using it, newest first; each field only
+// shows the ones its own options contain, which is what keeps a checkpoint out
+// of a UNET loader's row. localStorage, so it is this browser's and may come
+// back empty — a private window, cleared site data, or the accessor throwing.
 const RECENT_MAX = 12;
 const RECENT_SHOWN = 5;
-const readRecent = () => {
-  try { const a = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); return Array.isArray(a) ? a.filter(x => typeof x === 'string') : []; }
+const readRecent = key => {
+  try { const a = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(a) ? a.filter(x => typeof x === 'string') : []; }
   catch (e) { return []; }
 };
-const writeRecent = list => { try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch (e) {} };
+const writeRecent = (key, list) => { try { localStorage.setItem(key, JSON.stringify(list)); } catch (e) {} };
 
 export default {
   name: 'ComboSearch',
@@ -79,8 +87,13 @@ export default {
     // A sentence about the picks the host knows and this does not — the model
     // field's is that they come from different families. Shown under the pills.
     warn: { type: String, default: '' },
+    // The host's own selection; see "Selection owned by the host" above.
+    chosen: { type: Array, default: null },
+    recentKey: { type: String, default: 'crx.recentModels' },
+    // Where the options came from, for the box's hover.
+    about: { type: String, default: '' },
   },
-  emits: ['update:modelValue', 'update:picks'],
+  emits: ['update:modelValue', 'update:picks', 'toggle'],
   setup(props, { emit }) {
     const open = ref(false);
     const q = ref('');
@@ -107,14 +120,15 @@ export default {
     const shown = computed(() => matches.value.slice(0, LIMIT));
 
     // ── multi ──
-    const explicit = computed(() => !!(props.picks && props.picks.length));
-    const selected = computed(() => (explicit.value ? props.picks
+    const chosenMode = computed(() => Array.isArray(props.chosen));
+    const explicit = computed(() => !chosenMode.value && !!(props.picks && props.picks.length));
+    const selected = computed(() => (chosenMode.value ? props.chosen : explicit.value ? props.picks
       : (props.modelValue !== '' && props.modelValue != null ? [props.modelValue] : [])));
     const searching = computed(() => q.value.trim() !== '');
     const pills = computed(() => (searching.value
       ? matches.value.slice(0, PILLS).map(e => e.v)
-      : selected.value));
-    const pillState = v => (!selected.value.includes(v) ? '' : explicit.value ? 'on' : 'def');
+      : chosenMode.value ? [] : selected.value));
+    const pillState = v => (!selected.value.includes(v) ? '' : (explicit.value || chosenMode.value) ? 'on' : 'def');
     // A value ComfyUI does not list — a file made on another machine brings its
     // model's name with it. It runs exactly as far as that loader and fails
     // there, so it is marked here instead. Only against a real list: with none
@@ -124,18 +138,19 @@ export default {
     const MISSING = 'ComfyUI does not list this ' + props.unit + ' — a run that uses it fails at that node.\n';
     function pillTitle(v) {
       const s = pillState(v), miss = isMissing(v) ? MISSING : '';
+      if (chosenMode.value) return miss + v + (s ? '\nOn — click to switch it off' : '\nClick to add this ' + props.unit + ', switched on');
       if (s === 'def') return miss + v + '\nThe ' + props.unit + ' this workflow loads. Picking another replaces it; click this one to keep it alongside the others you pick.';
       if (s === 'on') return miss + v + '\nPicked — click to drop it';
       return miss + v + (explicit.value ? '\nClick to add it — every job runs once per picked ' + props.unit : '\nClick to use this instead');
     }
-    const recent = ref(props.multi ? readRecent() : []);
+    const recent = ref(props.multi ? readRecent(props.recentKey) : []);
     const recentPills = computed(() => (searching.value ? [] : recent.value
       .filter(v => listed.value.has(v) && !selected.value.includes(v)).slice(0, RECENT_SHOWN)));
     // Read fresh before writing: another picker on the page, or another tab,
     // may have added to it since this one mounted.
     function remember(v) {
-      const list = [v].concat(readRecent().filter(x => x !== v)).slice(0, RECENT_MAX);
-      writeRecent(list); recent.value = list;
+      const list = [v].concat(readRecent(props.recentKey).filter(x => x !== v)).slice(0, RECENT_MAX);
+      writeRecent(props.recentKey, list); recent.value = list;
     }
     function setPicks(list) {
       if (list && list.length) { emit('update:modelValue', list[0]); emit('update:picks', list.slice()); }
@@ -143,6 +158,7 @@ export default {
     }
     function toggle(v) {
       if (v == null) return;
+      if (chosenMode.value) { const adding = !props.chosen.includes(v); emit('toggle', v); if (adding) remember(v); return; }
       if (!explicit.value) { setPicks([v]); remember(v); return; }   // first pick: replaces, or keeps the arrived-with one
       const cur = props.picks;
       // Unpicking the last one leaves it as the model, back in the unpicked state.
@@ -212,12 +228,12 @@ export default {
 
     return { open, q, hi, root, box, list, current, matches, shown, show, hide, pick, onKey, LIMIT,
       explicit, selected, searching, pills, pillState, pillTitle, shortModel, toggle, onMultiKey, PILLS,
-      isMissing, MISSING, recentPills };
+      isMissing, MISSING, recentPills, chosenMode };
   },
   template: `
     <div v-if="multi" class="cbs multi" ref="root">
       <input ref="box" class="rmx-inp cbs-q" type="search" v-model="q" autocomplete="off" spellcheck="false"
-             :placeholder="placeholder" :title="options.length + ' to choose from — type to search, click the results to pick'"
+             :placeholder="placeholder" :title="options.length + ' to choose from' + (about ? ' — ' + about : '') + '. Type to search, click the results to pick.'"
              @keydown="onMultiKey">
       <!-- mousedown.prevent keeps the focus in the box, so a run of clicks can
            be followed by more typing without reaching for the field again. -->
@@ -229,9 +245,9 @@ export default {
       <span v-if="searching" class="cbs-note">
         <template v-if="!matches.length">nothing matches</template>
         <template v-else-if="matches.length > PILLS">{{ matches.length - PILLS }} more — keep typing</template>
-        <template v-if="selected.length > 1"><template v-if="matches.length"> · </template>{{ selected.length }} picked</template>
+        <template v-if="!chosenMode && selected.length > 1"><template v-if="matches.length"> · </template>{{ selected.length }} picked</template>
       </span>
-      <span v-else-if="selected.length > 1" class="cbs-note">every job runs once per {{ unit }}, in this order</span>
+      <span v-else-if="!chosenMode && selected.length > 1" class="cbs-note">every job runs once per {{ unit }}, in this order</span>
       <template v-if="recentPills.length">
         <span class="cbs-note cbs-recent-lbl">recent</span>
         <button v-for="v in recentPills" :key="'r:' + v" type="button" class="cbs-pill rec" :title="pillTitle(v)"

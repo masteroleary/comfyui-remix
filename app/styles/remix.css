@@ -620,3 +620,5 @@ select.rmx-inp{cursor:pointer}
 .cbs-cur.miss{border-color:#ff9f0a}
 .cbs-miss{color:#ff9f0a;flex:none}
 .cbs-warn{flex-basis:100%;font-size:11.5px;color:#ff9f0a}
+/* The lora search at the foot of a stack (WorkflowFields). */
+.rmx-lora-search{margin-top:8px}
