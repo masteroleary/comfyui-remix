@@ -3399,24 +3399,29 @@ runTests();
       try {
         const { filePath } = JSON.parse(body);
         if (!filePath) { jsonRes(res, { error: 'Missing filePath' }, 400); return; }
+        // Only a file already in a media root may be moved. This took any path on the
+        // machine: a document anywhere on disk was moved out of its folder and into the
+        // one /file/ serves.
+        const src = path.resolve(String(filePath));
+        if (!realInMediaRoots(src)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
 
         // Always move to Favorites
         const destDir = FAVORITES_DIR;
 
         if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
 
-        const dest = path.join(destDir, path.basename(filePath));
+        const dest = path.join(destDir, path.basename(src));
 
-        moveFile(filePath, dest, (err) => {
+        moveFile(src, dest, (err) => {
           if (err) { jsonRes(res, { error: err.message }, 500); return; }
 
           // Also move matching thumbnail if exists
-          const thumbSrc = getThumbPath(filePath);
+          const thumbSrc = getThumbPath(src);
           if (thumbSrc) {
             const thumbDest = path.join(destDir, path.basename(thumbSrc));
             moveFile(thumbSrc, thumbDest, () => {});
           }
-          promptIndexMove(filePath, dest); // keep prompt search pointing at the new location
+          promptIndexMove(src, dest); // keep prompt search pointing at the new location
 
           jsonRes(res, { ok: true, dest });
         });
@@ -3433,14 +3438,19 @@ runTests();
       try {
         const { filePath } = JSON.parse(body);
         if (!filePath) { jsonRes(res, { error: 'Missing filePath' }, 400); return; }
+        // The same check /api/delete-folder and /api/bulk-delete make. Without it this
+        // deleted any file the server's account could reach — which, run as SYSTEM, is
+        // any file on the machine.
+        const target = path.resolve(String(filePath));
+        if (!realInMediaRoots(target)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
 
-        fs.unlink(filePath, (err) => {
+        fs.unlink(target, (err) => {
           if (err) { jsonRes(res, { error: err.message }, 500); return; }
 
           // Also delete matching thumbnail if exists
-          const thumb = getThumbPath(filePath);
+          const thumb = getThumbPath(target);
           if (thumb) fs.unlink(thumb, () => {});
-          promptIndexRemove(filePath); // keep prompt search in sync immediately
+          promptIndexRemove(target); // keep prompt search in sync immediately
 
           jsonRes(res, { ok: true });
         });
@@ -3923,8 +3933,20 @@ runTests();
   }
 
   // Serve file (with range support)
+  // Media only, for both of these. They served any file on the machine, and a GET
+  // answers every origin (Access-Control-Allow-Origin: *): with the password gate off — its
+  // default — any web page open in a browser on this machine could fetch a file off the
+  // disk and read it. A malformed escape is a 400 rather than a throw, which in this
+  // handler took the whole server down.
+  const mediaPathFrom = prefix => {
+    let p;
+    try { p = path.resolve(decodeURIComponent(pn.slice(prefix.length))); } catch { return { status: 400 }; }
+    return realInMediaRoots(p) ? { path: p } : { status: 403 };
+  };
   if (pn.startsWith('/file/')) {
-    const filePath = decodeURIComponent(pn.slice(6));
+    const m = mediaPathFrom('/file/');
+    if (!m.path) { res.writeHead(m.status); res.end(m.status === 403 ? 'Forbidden' : 'Bad request'); return; }
+    const filePath = m.path;
     // Set before serveFile, which only supplies its own default when nothing
     // has been set yet.
     res.setHeader('Cache-Control', mediaCacheHeader());
@@ -3933,7 +3955,9 @@ runTests();
 
   // Serve thumbnail
   if (pn.startsWith('/thumb/')) {
-    const filePath = decodeURIComponent(pn.slice(7));
+    const m = mediaPathFrom('/thumb/');
+    if (!m.path) { res.writeHead(m.status); res.end(m.status === 403 ? 'Forbidden' : 'Bad request'); return; }
+    const filePath = m.path;
     const thumbPath = getThumbPath(filePath);
     res.setHeader('Cache-Control', mediaCacheHeader());
     if (thumbPath) { serveFile(thumbPath, req, res); }
@@ -3943,8 +3967,13 @@ runTests();
 
   // API: Extract metadata from media file
   if (pn === '/api/metadata' && req.method === 'GET') {
-    const filePath = decodeURIComponent(url.searchParams.get('path') || '');
+    let filePath = '';
+    try { filePath = decodeURIComponent(url.searchParams.get('path') || ''); } catch { jsonRes(res, { error: 'Bad path' }, 400); return; }
     if (!filePath) { jsonRes(res, { error: 'Missing path' }, 400); return; }
+    // Media only: it read the embedded text out of any PNG or video on the machine, and
+    // like /file/ its answer is readable from any origin.
+    filePath = path.resolve(filePath);
+    if (!realInMediaRoots(filePath)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
 
     const ext = path.extname(filePath).toLowerCase();
     if (['.png'].includes(ext)) {
