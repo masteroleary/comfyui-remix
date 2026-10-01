@@ -835,8 +835,8 @@ running it again.
 
 ## Same-origin guard
 
-Every response carries `Access-Control-Allow-Origin: *`, which means a page on any
-site the user has open may POST here — and no endpoint asks who called. That was
+A page on any site the user has open may *send* requests here — a form POST or a
+`no-cors` fetch needs nobody's permission — and no endpoint asks who called. That was
 enough to fire `/api/maintenance/clean` or `/api/bulk-delete` at `127.0.0.1` with
 no click involved. The firewall, Tailscale and the client certificates all sit
 *upstream* of this: the request starts inside the machine, in a browser that is
@@ -860,12 +860,21 @@ request is same-origin. Three things about it are load-bearing:
   to omit it on a POST — so the absent case is not a way in. `null` is what a
   sandboxed iframe sends, and folding the two together hands the hole straight back.
 
-GETs are deliberately untouched: they change nothing, and the media, thumbnails and
-the WebSocket proxy all have to keep working.
+GETs need no `Origin` check because **reading is closed as well**:
 
-Note the wildcard CORS header itself is still `*`, so a cross-origin page can still
-*read* a GET response (a listing, prompt text). That is a separate call from this
-one and has not been made.
+- **No CORS grant on any response.** Every response used to carry
+  `Access-Control-Allow-Origin: *`, so any page could *read* any GET answer — a
+  listing, prompt text, the folder picker's directory names, and, while `/file/`
+  took any path, any file on the disk, the password gate being off by default. The
+  app's own pages are same-origin and never needed it. A preflight is answered
+  204 with no grant, which a browser treats as refused. The ComfyUI proxy strips
+  ComfyUI's own `access-control-*` headers (it sends them when started with
+  `--enable-cors-header`), or they would reopen it.
+- **`Cross-Origin-Resource-Policy: same-origin` on every response**, so another site
+  cannot even embed one — an `<img>` of your media in its page, which needs no CORS.
+- **The WebSocket upgrade takes `originAllowed`**, the same rule as the POST guard.
+  Browsers apply no CORS to WebSockets, so any page could otherwise open `/comfy-ws`
+  and watch the progress and previews of every run.
 
 ## Password gate
 

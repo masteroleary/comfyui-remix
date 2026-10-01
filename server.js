@@ -2854,13 +2854,17 @@ process.on('uncaughtException', err => {
   process.exit(1);
 });
 
-// ── Same-origin guard for state-changing requests ─────────────────────────
-// Every response carries Access-Control-Allow-Origin: *, so a page on any site
-// the user happens to have open can POST here — and nothing downstream asks who
-// called. That is enough to fire /api/maintenance/clean or /api/bulk-delete at
-// 127.0.0.1 with no click and no phishing. The firewall, Tailscale and the
-// client certificates all sit upstream of this: the request originates inside
-// the machine, from a browser that is already past every one of them.
+// ── Same-origin guard ──────────────────────────────────────────────────────
+// A page on any site the user happens to have open can send requests here, and a
+// browser lets it whatever this server answers: a form POST or a fetch in no-cors
+// mode needs no permission to *send*. That is enough to fire /api/maintenance/clean
+// or /api/bulk-delete at 127.0.0.1 with no click and no phishing. The firewall,
+// Tailscale and the client certificates all sit upstream of this: the request
+// originates inside the machine, from a browser that is already past every one of
+// them. So state-changing requests are refused unless they come from a page this
+// server served — and reading is closed too: no response grants another origin
+// access (no Access-Control-Allow-Origin), and every response says
+// Cross-Origin-Resource-Policy: same-origin, so another site cannot even embed one.
 //
 // The comparison is Origin against the Host of the *same* request, not against
 // a list of approved hostnames. The app answers on the tailnet name, the
@@ -2873,7 +2877,15 @@ process.on('uncaughtException', err => {
 // cross-origin POST for well over a decade.
 const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 function sameOriginOk(req) {
-  if (!STATE_CHANGING.has(req.method)) return true;   // GETs stay open; they change nothing
+  // GETs need no Origin check: they change nothing, and without a CORS grant a
+  // cross-origin page that sends one cannot read the answer.
+  if (!STATE_CHANGING.has(req.method)) return true;
+  return originAllowed(req);
+}
+
+// Did this come from a page this server served (or from no browser at all)? Shared by
+// the POST guard above and the WebSocket upgrade, which CORS does not cover.
+function originAllowed(req) {
   const origin = req.headers.origin;
   // No header at all is curl, the PowerShell tooling, or any non-browser client
   // — and a browser cannot be made to omit it on a POST, so this is not a way in.
@@ -2887,12 +2899,13 @@ function sameOriginOk(req) {
 }
 
 const server = http.createServer((req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // No CORS grant on anything (there was a wildcard, which let any page read any GET
+  // answer — listings, prompt text, folder names), and same-origin resources only. The
+  // app's own pages are same-origin and need neither; nothing else is meant to.
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204, { 'Access-Control-Allow-Methods': 'GET, POST, DELETE', 'Access-Control-Allow-Headers': 'Content-Type' });
-    res.end(); return;
-  }
+  // A preflight answered with no grant is a preflight refused, which is the point.
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
   if (!sameOriginOk(req)) {
     console.log('[Blocked] cross-origin ' + req.method + ' ' + req.url + ' from ' + req.headers.origin);
@@ -3933,11 +3946,12 @@ runTests();
   }
 
   // Serve file (with range support)
-  // Media only, for both of these. They served any file on the machine, and a GET
-  // answers every origin (Access-Control-Allow-Origin: *): with the password gate off — its
-  // default — any web page open in a browser on this machine could fetch a file off the
-  // disk and read it. A malformed escape is a 400 rather than a throw, which in this
-  // handler took the whole server down.
+  // Media only, for both of these. They served any file on the machine — and while every
+  // response carried Access-Control-Allow-Origin: *, any web page open in a browser here
+  // could fetch one and read it, the password gate being off by default. The wildcard is
+  // gone; this is the half that still matters to anything running in the app's own page.
+  // A malformed escape is a 400 rather than a throw, which in this handler took the whole
+  // server down.
   const mediaPathFrom = prefix => {
     let p;
     try { p = path.resolve(decodeURIComponent(pn.slice(prefix.length))); } catch { return { status: 400 }; }
@@ -3970,8 +3984,7 @@ runTests();
     let filePath = '';
     try { filePath = decodeURIComponent(url.searchParams.get('path') || ''); } catch { jsonRes(res, { error: 'Bad path' }, 400); return; }
     if (!filePath) { jsonRes(res, { error: 'Missing path' }, 400); return; }
-    // Media only: it read the embedded text out of any PNG or video on the machine, and
-    // like /file/ its answer is readable from any origin.
+    // Media only: it read the embedded text out of any PNG or video on the machine.
     filePath = path.resolve(filePath);
     if (!realInMediaRoots(filePath)) { jsonRes(res, { error: 'Access denied' }, 403); return; }
 
@@ -5116,7 +5129,13 @@ runTests();
       headers: fwdHeaders,
     };
     const proxyReq = http.request(opts, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      // ComfyUI sends CORS headers of its own when started with --enable-cors-header;
+      // passed through, they would reopen exactly what the top of this handler closed.
+      const headers = { ...proxyRes.headers };
+      for (const k of Object.keys(headers)) {
+        if (/^access-control-/i.test(k) || /^cross-origin-resource-policy$/i.test(k)) delete headers[k];
+      }
+      res.writeHead(proxyRes.statusCode, headers);
       proxyRes.pipe(res);
     });
     proxyReq.on('error', (e) => { jsonRes(res, { error: e.message }, 502); });
@@ -5148,7 +5167,17 @@ server.on('upgrade', (req, socket, head) => {
   // in one afternoon, each time looking like "the app is just gone".
   socket.on('error', e => console.log('[WS Proxy] client socket error:', e.code || e.message));
 
-  const reqUrl = new URL(req.url, `http://${req.headers.host}`);
+  // Browsers apply no CORS to a WebSocket: any page could open this and watch ComfyUI's
+  // progress and previews of every run. Held to the POST guard's rule instead.
+  if (!originAllowed(req)) {
+    console.log('[Blocked] cross-origin WebSocket from ' + req.headers.origin);
+    socket.destroy();
+    return;
+  }
+  // A Host header a URL cannot parse would throw here, and an uncaught throw takes the
+  // whole server down.
+  let reqUrl;
+  try { reqUrl = new URL(req.url, `http://${req.headers.host}`); } catch { socket.destroy(); return; }
   if (!reqUrl.pathname.startsWith('/comfy-ws') || !isAuthed(req)) {
     socket.destroy();
     return;
